@@ -51,3 +51,4 @@ jobs:
           echo "${ACTIONLINT_SHA256}  ${ARCHIVE}" | sha256sum --check
           tar -xzf "$ARCHIVE" -C "$RUNNER_TEMP" actionlint
           "${RUNNER_TEMP}/actionlint" -color
+          
