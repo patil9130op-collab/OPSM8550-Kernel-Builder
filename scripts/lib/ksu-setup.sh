@@ -28,7 +28,7 @@ setup_kernelsu_repo() {
 
   refs_to_try="$requested_ref"
   if [[ "$allow_fallbacks" == "1" ]]; then
-    refs_to_try="$refs_to_try dev main"
+    refs_to_try="$refs_to_try dev main v4.1.0"
   fi
 
   for ref in $refs_to_try; do
@@ -52,7 +52,7 @@ setup_kernelsu_repo() {
     fi
 
     rm -rf "$repo_dir"
-    echo "[!] ${owner}/${repo} branch '$ref' is unavailable, trying next fallback..."
+    echo "[!] ${owner}/${repo} branch/ref '$ref' is unavailable, trying next fallback..."
   done
 
   if [[ "$cloned" -ne 1 ]]; then
@@ -102,6 +102,11 @@ install_ksu_variant() {
     "ReSukiSU"|"ReSukiSU-with-susfs"|"ReSukiSU-with-susfs-nomount")
       : "${KSU_COMMIT:?KSU_COMMIT must be resolved for ReSukiSU}"
       setup_kernelsu_repo "ReSukiSU" "ReSukiSU" "$KSU_COMMIT"
+      ;;
+    "ReSukiSU-with-susfs-kpm")
+      # ReSukiSU v4.1.0 (with KPM code support)
+      KSU_COMMIT_TARGET="${KSU_COMMIT:-v4.1.0}"
+      setup_kernelsu_repo "ReSukiSU" "ReSukiSU" "$KSU_COMMIT_TARGET" "1"
       ;;
     *)
       echo "::error::Unsupported ksu_type: $ksu_type"
