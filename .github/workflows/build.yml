@@ -1,4 +1,4 @@
- Name: Build OnePlus Kernel
+ name: Build OnePlus Kernel
 run-name: >-
   ${{ inputs.build_profile }} | ${{ inputs.root_solution }} | ${{ inputs.build_mode }}
 
