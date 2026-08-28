@@ -196,6 +196,7 @@ resolve_root_solution() {
     "SukiSU Ultra + KPM (experimental)") KSU_TYPE="SukiSU-Ultra-with-KPM" ;;
     "ReSukiSU") KSU_TYPE="ReSukiSU" ;;
     "ReSukiSU + susfs") KSU_TYPE="ReSukiSU-with-susfs" ;;
+    "ReSukiSU + SUSFS + KPM") KSU_TYPE="ReSukiSU-with-susfs-kpm" ;;
     "ReSukiSU + SUSFS + NoMount (experimental)") KSU_TYPE="ReSukiSU-with-susfs-nomount" ;;
     *)
       echo "::error::Unsupported root solution: $1"
