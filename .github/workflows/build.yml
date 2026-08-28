@@ -1,4 +1,4 @@
-name: Build OnePlus Kernel
+ Name: Build OnePlus Kernel
 run-name: >-
   ${{ inputs.build_profile }} | ${{ inputs.root_solution }} | ${{ inputs.build_mode }}
 
@@ -62,6 +62,7 @@ on:
           - SukiSU Ultra + KPM (experimental)
           - ReSukiSU
           - ReSukiSU + susfs
+          - ReSukiSU + SUSFS + KPM
           - ReSukiSU + SUSFS + NoMount (experimental)
       build_mode:
         description: Validate quickly, keep an artifact, or also publish a release
@@ -336,3 +337,4 @@ jobs:
           for asset in "$ASSET_DIR"/*.zip "$ASSET_DIR"/Image-* "$ASSET_DIR"/build-info.json "$ASSET_DIR"/SHA256SUMS; do
             upload_asset "$asset"
           done
+          
