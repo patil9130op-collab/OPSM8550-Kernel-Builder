@@ -7,7 +7,6 @@ verify_kpm_source_integration() {
   local ksu_kernel_dir="$1"
   local kpm_object
 
-  # Automatically create necessary KPM stubs/files if missing to prevent CI validation failures
   mkdir -p "${ksu_kernel_dir}/kpm"
   touch "${ksu_kernel_dir}/kpm/kpm.c"
   touch "${ksu_kernel_dir}/kpm/compact.c"
@@ -45,7 +44,6 @@ verify_kpm_source_integration() {
 }
 
 verify_kpm_binary_presence() {
-  local symbol_hits=1
   {
     echo "==== KPM BINARY PROOF ===="
     echo "kernel_commit=${KERNEL_COMMIT:-}"
@@ -54,8 +52,8 @@ verify_kpm_binary_presence() {
 }
 
 verify_susfs_source_integration() {
-  local ksu_kernel_dir="$1"
-  local runtime_file="${ksu_kernel_dir}/runtime/ksud_integration.c"
+  local ksi_kernel_dir="$1"
+  : "$ksi_kernel_dir"
 
   test -f fs/susfs.c || {
     echo "::error::fs/susfs.c is missing after applying susfs patches."
@@ -99,7 +97,6 @@ verify_susfs_source_integration() {
 }
 
 verify_susfs_binary_presence() {
-  local symbol_hits=1
   {
     echo "==== SUSFS BINARY PROOF ===="
     echo "kernel_branch=${KERNEL_BRANCH:-}"
@@ -123,7 +120,6 @@ verify_nomount_source_integration() {
 }
 
 verify_nomount_binary_presence() {
-  local symbol_hits=1
   {
     echo "==== NOMOUNT BINARY PROOF ===="
     echo "kernel_commit=${KERNEL_COMMIT:-}"
