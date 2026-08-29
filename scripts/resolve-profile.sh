@@ -41,8 +41,6 @@ else
   KERNEL_REPO="https://github.com/${KERNEL_SOURCE}/android_kernel_oneplus_${UPSTREAM_SOC}.git"
   MODULES_REPO="https://github.com/${KERNEL_SOURCE}/android_kernel_oneplus_${UPSTREAM_SOC}-modules.git"
   KERNEL_CLONE_DIR="${SOC}"
-  # Vendor kernel symlinks point to the upstream repository stem, which can
-  # intentionally differ from the marketed SoC (Nord CE4: sm7550 -> sm8550).
   MODULES_CLONE_DIR="${UPSTREAM_SOC}-modules"
 fi
 
@@ -85,8 +83,6 @@ case "$KSU_TYPE" in
     KSU_REF="dev"
     ;;
   KernelSU-Next-with-susfs)
-    # The official dev branch does not carry the KernelSU-side SUSFS hooks.
-    # This branch tracks it and provides the matching in-tree integration.
     KSU_REPO="https://github.com/pershoot/KernelSU-Next.git"
     KSU_REF="dev-susfs"
     ;;
@@ -95,6 +91,10 @@ case "$KSU_TYPE" in
     KSU_REF="master"
     ;;
   SukiSU-Ultra-with-KPM)
+    KSU_REPO="https://github.com/SukiSU-Ultra/SukiSU-Ultra.git"
+    KSU_REF="main"
+    ;;
+  SukiSU-Ultra-SUSFS-ZeroMount*|SukiSU-Ultra-with-SUSFS-ZeroMount*)
     KSU_REPO="https://github.com/SukiSU-Ultra/SukiSU-Ultra.git"
     KSU_REF="main"
     ;;
@@ -118,13 +118,26 @@ SUSFS_REF=""
 SUSFS_COMMIT=""
 SUSFS_PATCH_FILE=""
 SUSFS_MIN_VERSION=""
-if [[ "$KSU_TYPE" == *susfs* ]]; then
+if [[ "$KSU_TYPE" == *susfs* || "$KSU_TYPE" == *SUSFS* || "$KSU_TYPE" == *ZeroMount* ]]; then
   SUSFS_MIN_VERSION="2.2.0"
   resolve_susfs_settings "$SOC" "$KERNEL_BRANCH"
   SUSFS_COMMIT="$(git_ls_remote_retry --exit-code "$SUSFS_REPO" "refs/heads/${SUSFS_REF}" \
     | awk 'NR == 1 {print $1}')"
   if [[ ! "$SUSFS_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
     echo "::error::Could not resolve susfs branch '$SUSFS_REF' to a commit."
+    exit 1
+  fi
+fi
+
+ZEROMOUNT_REPO="https://github.com/Enginex0/Super-Builders.git"
+ZEROMOUNT_REF=""
+ZEROMOUNT_COMMIT=""
+if [[ "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* ]]; then
+  ZEROMOUNT_REF="main"
+  ZEROMOUNT_COMMIT="$(git_ls_remote_retry --exit-code "$ZEROMOUNT_REPO" "refs/heads/${ZEROMOUNT_REF}" \
+    | awk 'NR == 1 {print $1}')"
+  if [[ ! "$ZEROMOUNT_COMMIT" =~ ^[0-9a-f]{40}$ ]]; then
+    echo "::error::Could not resolve ZeroMount branch '$ZEROMOUNT_REF' to a commit."
     exit 1
   fi
 fi
@@ -222,6 +235,9 @@ esac
   echo "SUSFS_COMMIT=$SUSFS_COMMIT"
   echo "SUSFS_PATCH_FILE=$SUSFS_PATCH_FILE"
   echo "SUSFS_MIN_VERSION=$SUSFS_MIN_VERSION"
+  echo "ZEROMOUNT_REPO=$ZEROMOUNT_REPO"
+  echo "ZEROMOUNT_REF=$ZEROMOUNT_REF"
+  echo "ZEROMOUNT_COMMIT=$ZEROMOUNT_COMMIT"
   echo "NOMOUNT_REPO=$NOMOUNT_REPO"
   echo "NOMOUNT_REF=$NOMOUNT_REF"
   echo "NOMOUNT_COMMIT=$NOMOUNT_COMMIT"
@@ -253,6 +269,8 @@ esac
   echo "susfs_ref=$SUSFS_REF"
   echo "susfs_commit=$SUSFS_COMMIT"
   echo "susfs_min_version=$SUSFS_MIN_VERSION"
+  echo "zeromount_ref=$ZEROMOUNT_REF"
+  echo "zeromount_commit=$ZEROMOUNT_COMMIT"
   echo "nomount_ref=$NOMOUNT_REF"
   echo "nomount_commit=$NOMOUNT_COMMIT"
   echo "anykernel_commit=$ANYKERNEL_COMMIT"
@@ -280,6 +298,9 @@ esac
   fi
   if [[ -n "$SUSFS_REF" ]]; then
     echo "- SUSFS: $SUSFS_REF (\`${SUSFS_COMMIT}\`, required >= v${SUSFS_MIN_VERSION})"
+  fi
+  if [[ -n "$ZEROMOUNT_REF" ]]; then
+    echo "- ZeroMount VFS Engine: $ZEROMOUNT_REF (\`${ZEROMOUNT_COMMIT}\`)"
   fi
   if [[ -n "$NOMOUNT_REF" ]]; then
     echo "- NoMount: $NOMOUNT_REF (\`${NOMOUNT_COMMIT}\`, experimental)"
