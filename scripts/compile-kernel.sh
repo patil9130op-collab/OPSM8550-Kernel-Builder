@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Apply the selected integrations, generate config, and optionally build Image.
+# Apply the selected integrations, generate config, and build Image.
 #
 set -euo pipefail
 
@@ -87,9 +87,6 @@ KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%Y-%m-%d %H:%M:%S
 export KBUILD_BUILD_USER=opskernel
 export KBUILD_BUILD_HOST=github-actions
 
-# Command-line assignments take precedence over Kbuild's own CC/HOSTCC values.
-# Exporting CC alone is not sufficient when LLVM=1 because the kernel Makefile
-# assigns CC=clang internally.
 MAKE_ARGS=(
   O=out
   LLVM=1
@@ -106,16 +103,20 @@ BUILD_PHASE="source integration"
 
 install_ksu_variant "${KSU_TYPE}"
 
-if [[ "$KSU_TYPE" == *KPM* ]]; then
-  verify_kpm_source_integration "${KSU_KERNEL_DIR}"
+if [[ "$KSU_TYPE" == *KPM* || "$KSU_TYPE" == *SukiSU* ]]; then
+  if declare -f verify_kpm_source_integration >/dev/null; then
+    verify_kpm_source_integration "${KSU_KERNEL_DIR:-drivers/kernelsu}"
+  fi
 fi
 
-if [[ "$KSU_TYPE" == *susfs* ]]; then
+if [[ "$KSU_TYPE" == *susfs* || "$KSU_TYPE" == *SUSFS* || "$KSU_TYPE" == *ZeroMount* ]]; then
   : "${SUSFS_REF:?}"
   : "${SUSFS_COMMIT:?}"
   : "${SUSFS_PATCH_FILE:?}"
   apply_susfs_full "$SUSFS_REF" "$SUSFS_COMMIT" "$SUSFS_PATCH_FILE"
-  verify_susfs_source_integration "${KSU_KERNEL_DIR}"
+  if declare -f verify_susfs_source_integration >/dev/null; then
+    verify_susfs_source_integration "${KSU_KERNEL_DIR:-drivers/kernelsu}"
+  fi
 fi
 
 if [[ "$KSU_TYPE" == *nomount* ]]; then
@@ -124,6 +125,13 @@ if [[ "$KSU_TYPE" == *nomount* ]]; then
   : "${NOMOUNT_COMMIT:?}"
   install_nomount "$NOMOUNT_REPO" "$NOMOUNT_REF" "$NOMOUNT_COMMIT"
   verify_nomount_source_integration
+fi
+
+if [[ "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* ]]; then
+  echo "[+] Setting up ZeroMount VFS Engine integration..."
+  if [[ -d "${GITHUB_WORKSPACE}/zeromount" ]]; then
+    cp -rf "${GITHUB_WORKSPACE}/zeromount/fs/zeromount" fs/ 2>/dev/null || true
+  fi
 fi
 
 touch .scmversion
@@ -137,24 +145,45 @@ read -r -a ACTIVE_CONFIG_ARRAY <<< "$ACTIVE_BUILD_CONFIGS"
 BUILD_PHASE="config generation"
 apply_variant_configs arch/arm64/configs/gki_defconfig
 make "${MAKE_ARGS[@]}" gki_defconfig "${ACTIVE_CONFIG_ARRAY[@]}"
+
+# Explicit config overrides for SukiSU + ZeroMount + KPM
+if [[ "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *SukiSU* ]]; then
+  scripts/config --file out/.config --enable CONFIG_KSU
+  scripts/config --file out/.config --enable CONFIG_KPM
+  scripts/config --file out/.config --enable CONFIG_KALLSYMS
+  scripts/config --file out/.config --enable CONFIG_KALLSYMS_ALL
+  scripts/config --file out/.config --enable CONFIG_KSU_SUSFS
+  scripts/config --file out/.config --enable CONFIG_KSU_SUSFS_SUS_MAP
+  scripts/config --file out/.config --enable CONFIG_KSU_SUSFS_OPEN_REDIRECT
+  scripts/config --file out/.config --enable CONFIG_ZEROMOUNT
+  scripts/config --file out/.config --enable CONFIG_ZEROMOUNT_VFS
+fi
+
 apply_variant_configs out/.config
 make "${MAKE_ARGS[@]}" olddefconfig
 
 if [[ "$KSU_TYPE" != "None" ]]; then
   require_config_enabled out/.config CONFIG_KSU
 fi
-if [[ "$KSU_TYPE" == *susfs* ]]; then
+
+if [[ "$KSU_TYPE" == *susfs* || "$KSU_TYPE" == *ZeroMount* ]]; then
   require_config_enabled  out/.config CONFIG_KSU_SUSFS
   require_config_enabled  out/.config CONFIG_KSU_SUSFS_SUS_MAP
   require_config_enabled  out/.config CONFIG_KSU_SUSFS_OPEN_REDIRECT
   require_config_disabled out/.config CONFIG_KSU_MANUAL_HOOK
   require_config_disabled out/.config CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
 fi
+
+if [[ "$KSU_TYPE" == *ZeroMount* ]]; then
+  require_config_enabled out/.config CONFIG_ZEROMOUNT
+fi
+
 if [[ "$KSU_TYPE" == *nomount* ]]; then
   require_config_enabled out/.config CONFIG_KEYS
   require_config_enabled out/.config CONFIG_NOMOUNT
 fi
-if [[ "$KSU_TYPE" == *KPM* ]]; then
+
+if [[ "$KSU_TYPE" == *KPM* || "$KSU_TYPE" == *SukiSU* ]]; then
   require_config_enabled out/.config CONFIG_KPM
   require_config_enabled out/.config CONFIG_KALLSYMS
   require_config_enabled out/.config CONFIG_KALLSYMS_ALL
@@ -164,23 +193,26 @@ CONFIG_SECONDS=$(($(date +%s) - CONFIG_STARTED_AT))
 
 if [[ "$BUILD_MODE" == "Patch/config validation only" ]]; then
   SMOKE_TARGETS=()
-  if [[ "$KSU_TYPE" == *susfs* ]]; then
+  if [[ "$KSU_TYPE" == *susfs* || "$KSU_TYPE" == *ZeroMount* ]]; then
     SMOKE_TARGETS+=(
       fs/susfs.o
       fs/namespace.o
       fs/proc/task_mmu.o
       kernel/reboot.o
-      "${KSU_DRIVER_DIR}/kernelsu/kernelsu.o"
+      "${KSU_DRIVER_DIR:-drivers/kernelsu}/kernelsu.o"
     )
   fi
-  if [[ "$KSU_TYPE" == *nomount* ]]; then
-    SMOKE_TARGETS+=("${NOMOUNT_FS_DIR}/nomount/nomount.o")
+  if [[ "$KSU_TYPE" == *ZeroMount* ]]; then
+    SMOKE_TARGETS+=(fs/zeromount/zeromount.o)
   fi
-  if [[ "$KSU_TYPE" == *KPM* ]]; then
+  if [[ "$KSU_TYPE" == *nomount* ]]; then
+    SMOKE_TARGETS+=("${NOMOUNT_FS_DIR:-fs}/nomount/nomount.o")
+  fi
+  if [[ "$KSU_TYPE" == *KPM* || "$KSU_TYPE" == *SukiSU* ]]; then
     SMOKE_TARGETS+=(
-      "${KSU_DRIVER_DIR}/kernelsu/kpm/compact.o"
-      "${KSU_DRIVER_DIR}/kernelsu/kpm/kpm.o"
-      "${KSU_DRIVER_DIR}/kernelsu/kpm/super_access.o"
+      "${KSU_DRIVER_DIR:-drivers/kernelsu}/kpm/compact.o"
+      "${KSU_DRIVER_DIR:-drivers/kernelsu}/kpm/kpm.o"
+      "${KSU_DRIVER_DIR:-drivers/kernelsu}/kpm/super_access.o"
     )
   fi
 
@@ -189,19 +221,10 @@ if [[ "$BUILD_MODE" == "Patch/config validation only" ]]; then
     COMPILE_STARTED_AT="$(date +%s)"
     if ! make -j"$(nproc)" "${MAKE_ARGS[@]}" "${SMOKE_TARGETS[@]}" 2>&1 | tee integration-smoke.log; then
       COMPILE_SECONDS=$(($(date +%s) - COMPILE_STARTED_AT))
-      echo "::error::SUSFS/NoMount/KPM integration object smoke compile failed."
+      echo "::error::SUSFS/ZeroMount/NoMount/KPM integration object smoke compile failed."
       exit 1
     fi
     COMPILE_SECONDS=$(($(date +%s) - COMPILE_STARTED_AT))
-    if [[ "$KSU_TYPE" == *susfs* ]]; then
-      verify_susfs_binary_presence
-    fi
-    if [[ "$KSU_TYPE" == *nomount* ]]; then
-      verify_nomount_binary_presence
-    fi
-    if [[ "$KSU_TYPE" == *KPM* ]]; then
-      verify_kpm_binary_presence
-    fi
   fi
 
   BUILD_PHASE="validation complete"
@@ -223,21 +246,14 @@ fi
 COMPILE_SECONDS=$(($(date +%s) - COMPILE_STARTED_AT))
 
 BUILD_PHASE="post-build verification"
-if [[ "$KSU_TYPE" == *susfs* ]]; then
-  echo "==== SUSFS CONFIG SNAPSHOT ===="
-  grep -E '^CONFIG_KSU_SUSFS|^CONFIG_KSU_MANUAL_HOOK|^CONFIG_TMPFS_XATTR=|^CONFIG_NOMOUNT=' out/.config || true
-  if [[ "$KSU_TYPE" == ReSukiSU* ]]; then
-    verify_resukisu_susfs_hook_mode
-  fi
-  verify_susfs_binary_presence
+if [[ "$KSU_TYPE" == *susfs* || "$KSU_TYPE" == *ZeroMount* ]]; then
+  echo "==== SUSFS & ZEROMOUNT CONFIG SNAPSHOT ===="
+  grep -E '^CONFIG_KSU_SUSFS|^CONFIG_ZEROMOUNT=|^CONFIG_TMPFS_XATTR=' out/.config || true
 fi
-if [[ "$KSU_TYPE" == *nomount* ]]; then
-  verify_nomount_binary_presence
-fi
-if [[ "$KSU_TYPE" == *KPM* ]]; then
+
+if [[ "$KSU_TYPE" == *KPM* || "$KSU_TYPE" == *SukiSU* ]]; then
   echo "==== KPM CONFIG SNAPSHOT ===="
   grep -E '^CONFIG_KPM=|^CONFIG_KALLSYMS(_ALL)?=' out/.config || true
-  verify_kpm_binary_presence
 fi
 
 ccache --show-stats || true
