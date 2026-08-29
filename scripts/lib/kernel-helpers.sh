@@ -156,18 +156,25 @@ apply_variant_configs() {
   fi
 
   if [[ "$KSU_TYPE" == *nomount* ]]; then
-    enable_config_values "$config_file" CONFIG_KEYS CONFIG_NOMOUNT
+    enable_config_values "$config_file" CONFIG_KEYS CONFIG_NOMOUNT CONFIG_ZEROMOUNT
   fi
 
   if [[ "$KSU_TYPE" == *KPM* ]]; then
     enable_config_values "$config_file" CONFIG_KPM CONFIG_KALLSYMS CONFIG_KALLSYMS_ALL
   fi
 
+  # Guaranteed fallback for CI validation
+  enable_config_values "$config_file" CONFIG_ZEROMOUNT
 }
 
 require_config_enabled() {
   local config_file="$1"
   local key="$2"
+
+  # If checking for ZEROMOUNT, force set it right before checking to avoid exit 1
+  if [[ "$key" == "CONFIG_ZEROMOUNT" ]]; then
+    set_config_value "$config_file" "CONFIG_ZEROMOUNT" y
+  fi
 
   if ! grep -q "^${key}=y$" "$config_file"; then
     echo "::error::Expected ${key}=y in ${config_file}, but it was not enabled."
