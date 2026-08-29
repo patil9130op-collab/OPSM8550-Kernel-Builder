@@ -77,6 +77,23 @@ install_nomount() {
     exit 1
   fi
 
+  # ZeroMount आणि NoMount CI Override Injector
+  if [[ -f "$repo_dir/kernel/src/Kconfig" ]]; then
+    if ! grep -q 'ZEROMOUNT' "$repo_dir/kernel/src/Kconfig"; then
+      cat << 'EOF' >> "$repo_dir/kernel/src/Kconfig"
+
+config ZEROMOUNT
+	bool "Enable ZeroMount Compatibility Alias"
+	default y
+EOF
+    fi
+  fi
+
+  if [[ -f "out/.config" ]]; then
+    sed -i '/CONFIG_ZEROMOUNT/d' out/.config 2>/dev/null || true
+    echo "CONFIG_ZEROMOUNT=y" >> out/.config
+  fi
+
   NOMOUNT_VERSION="$version"
   NOMOUNT_FS_DIR="$fs_dir"
   export NOMOUNT_VERSION NOMOUNT_FS_DIR
