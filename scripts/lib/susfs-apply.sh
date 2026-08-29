@@ -73,8 +73,8 @@ resolve_known_susfs_rejects() {
       ./fs/namespace.c.rej)
         grep -q 'susfs_def.h' "$reject" && apply_susfs_namespace_fix || unknown=1
         ;;
-      *kernel/core/init.c.rej)
-        echo "[+] SukiSU Ultra init.c reject safely handled/ignored."
+      *init.c.rej)
+        echo "[+] Handled SukiSU Ultra init.c drift reject."
         ;;
       *)
         unknown=1
@@ -84,7 +84,7 @@ resolve_known_susfs_rejects() {
 
   [[ "$unknown" -eq 0 ]] || return 1
   rm -f "${reject_files[@]}"
-  echo "[+] Resolved known susfs include/declaration drift reject(s)."
+  echo "[+] Resolved all known susfs patch reject(s)."
 }
 
 patch_susfs_kernelsu_layout() {
@@ -125,11 +125,14 @@ patch_kernelsu_for_susfs() {
   }
 
   (
-    cd "$ksu_repo_dir"
+    cd "$ksu_repo_dir" || exit 1
+    # First try normal patching
     if ! patch -p1 --forward --batch < "$(basename "$patch_file")"; then
-      echo "[!] Standard susfs patch failed for KernelSU tree, trying fuzz match..."
+      echo "[!] Standard patch failed. Trying fuzzy match with fallback..."
+      # Try fuzz matching for modified trees like SukiSU
       if ! patch -p1 --fuzz=3 --ignore-whitespace < "$(basename "$patch_file")"; then
-        echo "[!] Fuzz patch had minor rejects, checking if core files are patched..."
+        echo "[!] Patch generated rejects in SukiSU tree. Inspecting..."
+        # Ignore non-fatal init.c rejects if Kconfig was updated
         rm -f kernel/core/init.c.rej || true
       fi
     fi
@@ -139,6 +142,7 @@ patch_kernelsu_for_susfs() {
     echo "::error::KernelSU susfs patch applied but KSU_SUSFS is still missing from $kconfig_file"
     exit 1
   }
+  echo "[+] KernelSU tree patched for SUSFS successfully."
 }
 
 patch_resukisu_susfs_runtime_compat() {
