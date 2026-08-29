@@ -192,7 +192,7 @@ resolve_root_solution() {
     "KernelSU-Next + SUSFS") KSU_TYPE="KernelSU-Next-with-susfs" ;;
     "KowSU") KSU_TYPE="KowSU" ;;
     "SukiSU Ultra") KSU_TYPE="SukiSU-Ultra" ;;
-    "SukiSU Ultra + KPM") KSU_TYPE="SukiSU-Ultra-with-KPM" ;;
+    "SukiSU Ultra + KPM"|"SukiSU Ultra + KPM (experimental)") KSU_TYPE="SukiSU-Ultra-with-KPM" ;;
     "SukiSU Ultra + SUSFS") KSU_TYPE="SukiSU-Ultra-with-SUSFS" ;;
     "SukiSU Ultra + ZeroMount"|"SukiSU Ultra + KPM + SUSFS + ZeroMount") KSU_TYPE="SukiSU-Ultra-with-ZeroMount" ;;
     "ReSukiSU") KSU_TYPE="ReSukiSU" ;;
@@ -201,6 +201,31 @@ resolve_root_solution() {
     "ReSukiSU + SUSFS + NoMount (experimental)") KSU_TYPE="ReSukiSU-with-susfs-nomount" ;;
     *)
       echo "::error::Unsupported root solution: $1"
+      return 1
+      ;;
+  esac
+}
+
+validate_ksu_type() {
+  local ksu_type="$1"
+  case "$ksu_type" in
+    "None"|\
+    "Official-KernelSU"|\
+    "KowSU"|\
+    "KernelSU-Next"|\
+    "KernelSU-Next-with-susfs"|\
+    "SukiSU-Ultra"|\
+    "SukiSU-Ultra-with-KPM"|\
+    "SukiSU-Ultra-with-SUSFS"|\
+    "SukiSU-Ultra-with-ZeroMount"|\
+    "ReSukiSU"|\
+    "ReSukiSU-with-susfs"|\
+    "ReSukiSU-with-susfs-nomount"|\
+    "ReSukiSU-with-susfs-kpm")
+      return 0
+      ;;
+    *)
+      echo "::error::Invalid ksu_type: '$ksu_type'"
       return 1
       ;;
   esac
