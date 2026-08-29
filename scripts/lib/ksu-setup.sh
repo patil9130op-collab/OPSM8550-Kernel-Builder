@@ -100,7 +100,7 @@ install_ksu_variant() {
       setup_kernelsu_repo "SukiSU-Ultra" "SukiSU-Ultra" "$KSU_COMMIT_TARGET" "1"
       ;;
     "ReSukiSU"*)
-      # Force ReSukiSU to lock to v4.1.0 version to prevent automatic upgrade to v4.2 hook errors
+      # Locked to stable v4.1.0 to ensure zero mount, sufs & kpm build without hook errors
       KSU_COMMIT_TARGET="${KSU_COMMIT:-v4.1.0}"
       setup_kernelsu_repo "ReSukiSU" "ReSukiSU" "$KSU_COMMIT_TARGET" "0"
       ;;
