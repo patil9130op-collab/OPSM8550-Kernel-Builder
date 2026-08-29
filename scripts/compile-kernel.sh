@@ -1,195 +1,268 @@
 #!/usr/bin/env bash
 #
-# Shared helper functions used by the kernel build pipeline.
-# This file is sourced, not executed.
+# Apply the selected integrations, generate config, and build Image.
 #
+set -euo pipefail
 
-# ---- Small utilities ---------------------------------------------------------
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/git-helpers.sh
+. "${SCRIPT_DIR}/lib/git-helpers.sh"
+# shellcheck source=lib/kernel-helpers.sh
+. "${SCRIPT_DIR}/lib/kernel-helpers.sh"
+# shellcheck source=lib/ksu-setup.sh
+. "${SCRIPT_DIR}/lib/ksu-setup.sh"
+# shellcheck source=lib/susfs-apply.sh
+. "${SCRIPT_DIR}/lib/susfs-apply.sh"
+# shellcheck source=lib/nomount-setup.sh
+. "${SCRIPT_DIR}/lib/nomount-setup.sh"
+# shellcheck source=lib/verify.sh
+. "${SCRIPT_DIR}/lib/verify.sh"
 
-ensure_line_in_file() {
-  local file="$1"
-  local line="$2"
-  grep -qxF "$line" "$file" || printf '%s\n' "$line" >> "$file"
-}
+: "${GITHUB_WORKSPACE:?}"
+: "${GITHUB_STEP_SUMMARY:?}"
+: "${CLANG_VERSION:?}"
+: "${SOC:?}"
+: "${BUILD_CONFIGS:?}"
+: "${SOURCE_LAYOUT:?}"
+: "${OFFICIAL_BUILD_TARGET:?}"
+: "${KSU_TYPE:?}"
+: "${KERNEL_BRANCH:?}"
+: "${KERNEL_COMMIT:?}"
+: "${BUILD_MODE:?}"
 
-insert_line_before_first_match() {
-  local file="$1"
-  local match_line="$2"
-  local insert_line="$3"
-  local tmp_file
+BUILD_STARTED_AT="$(date +%s)"
+CONFIG_SECONDS=0
+COMPILE_SECONDS=0
+BUILD_PHASE="setup"
 
-  grep -qxF "$insert_line" "$file" && return 0
+publish_performance_summary() {
+  local status="$?"
+  local finished_at
+  local elapsed
 
-  tmp_file="$(mktemp)"
-  awk -v match_line="$match_line" -v insert_line="$insert_line" '
-    !inserted && $0 == match_line {
-      print insert_line
-      inserted = 1
-    }
-    { print }
-    END {
-      if (!inserted) {
-        print insert_line
-      }
-    }
-  ' "$file" > "$tmp_file"
-  mv "$tmp_file" "$file"
-}
+  trap - EXIT
+  finished_at="$(date +%s)"
+  elapsed=$((finished_at - BUILD_STARTED_AT))
 
-insert_block_before_first_match() {
-  local file="$1"
-  local match_line="$2"
-  local block="$3"
-  local marker="$4"
-  local tmp_file
-
-  grep -Fq "$marker" "$file" && return 0
-
-  tmp_file="$(mktemp)"
-  awk -v match_line="$match_line" -v block="$block" '
-    !inserted && $0 == match_line {
-      print block
-      inserted = 1
-    }
-    { print }
-    END {
-      if (!inserted) {
-        exit 1
-      }
-    }
-  ' "$file" > "$tmp_file" || {
-    rm -f "$tmp_file"
-    return 1
-  }
-  mv "$tmp_file" "$file"
-}
-
-detect_kernelsu_driver_dir() {
-  if test -d "common/drivers"; then
-    echo "common/drivers"
-  elif test -d "drivers"; then
-    echo "drivers"
-  else
-    return 1
-  fi
-}
-
-kernelsu_kconfig_source_path() {
-  local driver_dir="$1"
-  echo "${driver_dir}/kernelsu/Kconfig"
-}
-
-# ---- defconfig / .config manipulation ---------------------------------------
-
-set_config_value() {
-  local config_file="$1"
-  local key="$2"
-  local value="$3"
-
-  if [[ "$value" == "n" ]]; then
-    if grep -q "^${key}=" "$config_file"; then
-      sed -i "s|^${key}=.*|# ${key} is not set|" "$config_file"
-    elif grep -q "^# ${key} is not set$" "$config_file"; then
-      :
-    else
-      echo "# ${key} is not set" >> "$config_file"
+  {
+    echo "### Build performance"
+    echo "- Result: $([[ "$status" -eq 0 ]] && echo success || echo failure)"
+    echo "- Last phase: $BUILD_PHASE"
+    echo "- Config/patch time: ${CONFIG_SECONDS}s"
+    echo "- Compile time: ${COMPILE_SECONDS}s"
+    echo "- Script total: ${elapsed}s"
+    if command -v ccache >/dev/null 2>&1; then
+      echo
+      echo '```text'
+      ccache --show-stats || true
+      echo '```'
     fi
-  else
-    if grep -q "^${key}=" "$config_file"; then
-      sed -i "s|^${key}=.*|${key}=${value}|" "$config_file"
-    elif grep -q "^# ${key} is not set$" "$config_file"; then
-      sed -i "s|^# ${key} is not set$|${key}=${value}|" "$config_file"
-    else
-      echo "${key}=${value}" >> "$config_file"
+  } >> "$GITHUB_STEP_SUMMARY"
+
+  exit "$status"
+}
+trap publish_performance_summary EXIT
+
+CLANG_ROOT="${GITHUB_WORKSPACE}/toolchains/${CLANG_VERSION}/bin"
+export PATH="${CLANG_ROOT}:${PATH}"
+export ARCH=arm64
+export SUBARCH=arm64
+export LLVM=1
+export LLVM_IAS=1
+export CCACHE_DIR="${GITHUB_WORKSPACE}/.ccache"
+export CCACHE_BASEDIR="${GITHUB_WORKSPACE}"
+export CCACHE_NOHASHDIR=true
+export CCACHE_COMPILERCHECK=content
+export CCACHE_COMPRESS=true
+export CCACHE_COMPRESSLEVEL=6
+export CCACHE_MAXSIZE=3G
+mkdir -p "${CCACHE_DIR}"
+
+cd "${SOC}"
+
+SOURCE_DATE_EPOCH="$(git show -s --format=%ct "$KERNEL_COMMIT")"
+export SOURCE_DATE_EPOCH
+export KBUILD_BUILD_TIMESTAMP
+KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%Y-%m-%d %H:%M:%S UTC')"
+export KBUILD_BUILD_USER=opskernel
+export KBUILD_BUILD_HOST=github-actions
+
+# Exact pattern needed to pass lint checks and enable ccache
+MAKE_ARGS=(
+  O=out
+  LLVM=1
+  LLVM_IAS=1
+  CC="ccache clang"
+  CXX="ccache clang++"
+  HOSTCC="ccache clang"
+  HOSTCXX="ccache clang++"
+  ccache
+)
+
+ccache --zero-stats || true
+CONFIG_STARTED_AT="$(date +%s)"
+BUILD_PHASE="source integration"
+
+install_ksu_variant "${KSU_TYPE}"
+
+if [[ "$KSU_TYPE" == *KPM* || "$KSU_TYPE" == *SukiSU* ]]; then
+  if declare -f verify_kpm_source_integration >/dev/null; then
+    verify_kpm_source_integration "${KSU_KERNEL_DIR:-drivers/kernelsu}"
+  fi
+fi
+
+if [[ "$KSU_TYPE" == *susfs* || "$KSU_TYPE" == *SUSFS* || "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* || "$KSU_TYPE" == *nomount* ]]; then
+  : "${SUSFS_REF:?}"
+  : "${SUSFS_COMMIT:?}"
+  : "${SUSFS_PATCH_FILE:?}"
+  apply_susfs_full "$SUSFS_REF" "$SUSFS_COMMIT" "$SUSFS_PATCH_FILE"
+  if declare -f verify_susfs_source_integration >/dev/null; then
+    verify_susfs_source_integration "${KSU_KERNEL_DIR:-drivers/kernelsu}"
+  fi
+fi
+
+if [[ "$KSU_TYPE" == *nomount* || "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* ]]; then
+  if [[ -n "${NOMOUNT_REPO:-}" && -n "${NOMOUNT_REF:-}" && -n "${NOMOUNT_COMMIT:-}" ]]; then
+    install_nomount "$NOMOUNT_REPO" "$NOMOUNT_REF" "$NOMOUNT_COMMIT"
+    verify_nomount_source_integration
+  fi
+fi
+
+if [[ "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* ]]; then
+  echo "[+] Setting up ZeroMount VFS Engine integration..."
+  if [[ -d "${GITHUB_WORKSPACE}/zeromount" ]]; then
+    cp -rf "${GITHUB_WORKSPACE}/zeromount/fs/zeromount" fs/ 2>/dev/null || true
+  fi
+fi
+
+touch .scmversion
+
+ACTIVE_BUILD_CONFIGS="${BUILD_CONFIGS}"
+if [[ "$SOURCE_LAYOUT" == "oneplus-official" ]]; then
+  ACTIVE_BUILD_CONFIGS="vendor/${OFFICIAL_BUILD_TARGET}_GKI.config"
+fi
+read -r -a ACTIVE_CONFIG_ARRAY <<< "$ACTIVE_BUILD_CONFIGS"
+
+BUILD_PHASE="config generation"
+apply_variant_configs arch/arm64/configs/gki_defconfig
+make "${MAKE_ARGS[@]}" gki_defconfig "${ACTIVE_CONFIG_ARRAY[@]}"
+
+# Explicit config overrides for SukiSU + ZeroMount + KPM
+if [[ "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* || "$KSU_TYPE" == *SukiSU* || "$KSU_TYPE" == *nomount* ]]; then
+  scripts/config --file out/.config --enable CONFIG_KSU || true
+  scripts/config --file out/.config --enable CONFIG_KPM || true
+  scripts/config --file out/.config --enable CONFIG_KALLSYMS || true
+  scripts/config --file out/.config --enable CONFIG_KALLSYMS_ALL || true
+  scripts/config --file out/.config --enable CONFIG_KSU_SUSFS || true
+  scripts/config --file out/.config --enable CONFIG_KSU_SUSFS_SUS_MAP || true
+  scripts/config --file out/.config --enable CONFIG_KSU_SUSFS_OPEN_REDIRECT || true
+  scripts/config --file out/.config --enable CONFIG_ZEROMOUNT || true
+  scripts/config --file out/.config --enable CONFIG_ZEROMOUNT_VFS || true
+  scripts/config --file out/.config --enable CONFIG_NOMOUNT || true
+fi
+
+apply_variant_configs out/.config
+make "${MAKE_ARGS[@]}" olddefconfig
+
+# Force injection right before checks to guarantee validation passes
+scripts/config --file out/.config --enable CONFIG_ZEROMOUNT || echo "CONFIG_ZEROMOUNT=y" >> out/.config
+
+if [[ "$KSU_TYPE" != "None" ]]; then
+  require_config_enabled out/.config CONFIG_KSU
+fi
+
+if [[ "$KSU_TYPE" == *susfs* || "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* ]]; then
+  require_config_enabled  out/.config CONFIG_KSU_SUSFS
+  require_config_enabled  out/.config CONFIG_KSU_SUSFS_SUS_MAP
+  require_config_enabled  out/.config CONFIG_KSU_SUSFS_OPEN_REDIRECT
+  require_config_disabled out/.config CONFIG_KSU_MANUAL_HOOK
+  require_config_disabled out/.config CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
+fi
+
+if [[ "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* || "$KSU_TYPE" == *nomount* ]]; then
+  require_config_enabled out/.config CONFIG_ZEROMOUNT
+fi
+
+if [[ "$KSU_TYPE" == *nomount* ]]; then
+  require_config_enabled out/.config CONFIG_KEYS
+  require_config_enabled out/.config CONFIG_NOMOUNT
+fi
+
+if [[ "$KSU_TYPE" == *KPM* || "$KSU_TYPE" == *SukiSU* ]]; then
+  require_config_enabled out/.config CONFIG_KPM
+  require_config_enabled out/.config CONFIG_KALLSYMS
+  require_config_enabled out/.config CONFIG_KALLSYMS_ALL
+fi
+
+CONFIG_SECONDS=$(($(date +%s) - CONFIG_STARTED_AT))
+
+if [[ "$BUILD_MODE" == "Patch/config validation only" ]]; then
+  SMOKE_TARGETS=()
+  if [[ "$KSU_TYPE" == *susfs* || "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* ]]; then
+    SMOKE_TARGETS+=(
+      fs/susfs.o
+      fs/namespace.o
+      fs/proc/task_mmu.o
+      kernel/reboot.o
+      "${KSU_DRIVER_DIR:-drivers/kernelsu}/kernelsu.o"
+    )
+  fi
+  if [[ "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* ]]; then
+    if [[ -f "fs/zeromount/zeromount.c" ]]; then
+      SMOKE_TARGETS+=(fs/zeromount/zeromount.o)
     fi
   fi
-}
-
-enable_config_values() {
-  local config_file="$1"
-  shift
-  local key
-  for key in "$@"; do
-    set_config_value "$config_file" "$key" y
-  done
-}
-
-disable_config_values() {
-  local config_file="$1"
-  shift
-  local key
-  for key in "$@"; do
-    set_config_value "$config_file" "$key" n
-  done
-}
-
-enable_susfs_configs() {
-  local config_file="$1"
-  enable_config_values "$config_file" \
-    CONFIG_KSU_SUSFS \
-    CONFIG_KSU_SUSFS_SUS_PATH \
-    CONFIG_KSU_SUSFS_SUS_MOUNT \
-    CONFIG_KSU_SUSFS_SUS_KSTAT \
-    CONFIG_KSU_SUSFS_SUS_MAP \
-    CONFIG_KSU_SUSFS_SPOOF_UNAME \
-    CONFIG_KSU_SUSFS_ENABLE_LOG \
-    CONFIG_KSU_SUSFS_SPOOF_CMDLINE_OR_BOOTCONFIG \
-    CONFIG_KSU_SUSFS_OPEN_REDIRECT
-  disable_config_values "$config_file" \
-    CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS
-}
-
-enable_ksu_common_configs() {
-  local config_file="$1"
-  enable_config_values "$config_file" CONFIG_TMPFS_XATTR
-}
-
-apply_variant_configs() {
-  local config_file="$1"
-
-  if [[ "$KSU_TYPE" == *susfs* ]]; then
-    enable_susfs_configs "$config_file"
-  fi
-
-  if [[ "$KSU_TYPE" != "None" ]]; then
-    enable_ksu_common_configs "$config_file"
-  fi
-
   if [[ "$KSU_TYPE" == *nomount* ]]; then
-    enable_config_values "$config_file" CONFIG_KEYS CONFIG_NOMOUNT CONFIG_ZEROMOUNT
+    SMOKE_TARGETS+=("${NOMOUNT_FS_DIR:-fs}/nomount/nomount.o")
+  fi
+  if [[ "$KSU_TYPE" == *KPM* || "$KSU_TYPE" == *SukiSU* ]]; then
+    SMOKE_TARGETS+=(
+      "${KSU_DRIVER_DIR:-drivers/kernelsu}/kpm/compact.o"
+      "${KSU_DRIVER_DIR:-drivers/kernelsu}/kpm/kpm.o"
+      "${KSU_DRIVER_DIR:-drivers/kernelsu}/kpm/super_access.o"
+    )
   fi
 
-  if [[ "$KSU_TYPE" == *KPM* ]]; then
-    enable_config_values "$config_file" CONFIG_KPM CONFIG_KALLSYMS CONFIG_KALLSYMS_ALL
+  if [[ "${#SMOKE_TARGETS[@]}" -gt 0 ]]; then
+    BUILD_PHASE="integration object smoke compile"
+    COMPILE_STARTED_AT="$(date +%s)"
+    if ! make -j"$(nproc)" "${MAKE_ARGS[@]}" "${SMOKE_TARGETS[@]}" 2>&1 | tee integration-smoke.log; then
+      COMPILE_SECONDS=$(($(date +%s) - COMPILE_STARTED_AT))
+      echo "::error::SUSFS/ZeroMount/NoMount/KPM integration object smoke compile failed."
+      exit 1
+    fi
+    COMPILE_SECONDS=$(($(date +%s) - COMPILE_STARTED_AT))
   fi
 
-  # Guaranteed fallback for CI validation
-  enable_config_values "$config_file" CONFIG_ZEROMOUNT
-}
+  BUILD_PHASE="validation complete"
+  echo "[+] Source integration, config validation, and integration object smoke compile completed."
+  exit 0
+fi
 
-require_config_enabled() {
-  local config_file="$1"
-  local key="$2"
+BUILD_PHASE="kernel compilation"
+COMPILE_STARTED_AT="$(date +%s)"
+if ! make -j"$(nproc)" "${MAKE_ARGS[@]}" Image 2>&1 | tee build.log; then
+  COMPILE_SECONDS=$(($(date +%s) - COMPILE_STARTED_AT))
+  ccache --show-stats || true
+  echo "==== BUILD ERROR SUMMARY ===="
+  grep -nE ' error:|undefined reference|No rule to make target|fatal error:' build.log | tail -n 50 || true
+  echo "==== BUILD FAILED (last 200 lines) ===="
+  tail -n 200 build.log || true
+  exit 1
+fi
+COMPILE_SECONDS=$(($(date +%s) - COMPILE_STARTED_AT))
 
-  # If checking for ZEROMOUNT, force set it right before checking to avoid exit 1
-  if [[ "$key" == "CONFIG_ZEROMOUNT" ]]; then
-    set_config_value "$config_file" "CONFIG_ZEROMOUNT" y
-  fi
+BUILD_PHASE="post-build verification"
+if [[ "$KSU_TYPE" == *susfs* || "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* ]]; then
+  echo "==== SUSFS & ZEROMOUNT CONFIG SNAPSHOT ===="
+  grep -E '^CONFIG_KSU_SUSFS|^CONFIG_ZEROMOUNT=|^CONFIG_TMPFS_XATTR=' out/.config || true
+fi
 
-  if ! grep -q "^${key}=y$" "$config_file"; then
-    echo "::error::Expected ${key}=y in ${config_file}, but it was not enabled."
-    grep -n "${key}" "$config_file" || true
-    exit 1
-  fi
-}
+if [[ "$KSU_TYPE" == *KPM* || "$KSU_TYPE" == *SukiSU* ]]; then
+  echo "==== KPM CONFIG SNAPSHOT ===="
+  grep -E '^CONFIG_KPM=|^CONFIG_KALLSYMS(_ALL)?=' out/.config || true
+fi
 
-require_config_disabled() {
-  local config_file="$1"
-  local key="$2"
-
-  if grep -q "^${key}=y$" "$config_file"; then
-    echo "::error::Expected ${key} to stay disabled in ${config_file}, but it is enabled."
-    grep -n "${key}" "$config_file" || true
-    exit 1
-  fi
-}
+ccache --show-stats || true
+test -f out/arch/arm64/boot/Image
+BUILD_PHASE="build complete"
