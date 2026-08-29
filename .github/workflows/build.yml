@@ -62,6 +62,7 @@ on:
           - KernelSU-Next
           - KowSU
           - Official KernelSU
+          - ReSukiSU + SUSFS + KPM + ZeroMount
           - ReSukiSU + SUSFS + KPM
           - ReSukiSU + SUSFS + NoMount (experimental)
           - ReSukiSU + susfs
