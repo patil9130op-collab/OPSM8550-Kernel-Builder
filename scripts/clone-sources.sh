@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
 #
-# Clone the kernel and matching -modules repositories for the resolved profile.
-# Both clones run in parallel to cut latency.
+# Clone the kernel, matching -modules, KSU, SUSFS, and ZeroMount repositories.
 #
 set -euo pipefail
 
@@ -19,6 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${SOURCE_LAYOUT:?}"
 : "${SOC:?}"
 : "${GITHUB_WORKSPACE:?}"
+: "${KSU_TYPE:-None}"
 
 clone_repo() {
   local repo="$1"
@@ -61,4 +61,29 @@ if [[ "$SOURCE_LAYOUT" == "oneplus-official" ]]; then
   mv "$KERNEL_CLONE_DIR" "$OFFICIAL_KERNEL_DIR"
   rm -rf "${SOC}"
   ln -sfn "${GITHUB_WORKSPACE}/${OFFICIAL_KERNEL_DIR}" "${SOC}"
+  TARGET_KERNEL_DIR="$OFFICIAL_KERNEL_DIR"
+else
+  TARGET_KERNEL_DIR="$KERNEL_CLONE_DIR"
+fi
+
+# ==============================================================================
+# Root Solution, SUSFS & ZeroMount Setup
+# ==============================================================================
+
+# 1. Clone SukiSU / KernelSU
+if [[ -n "${KSU_REPO:-}" && -n "${KSU_COMMIT:-}" ]]; then
+  clone_repo "$KSU_REPO" "${KSU_REF:-main}" "$KSU_COMMIT" "${TARGET_KERNEL_DIR}/KernelSU" "KernelSU/SukiSU repo"
+  echo "[setup] KernelSU / SukiSU source successfully placed in ${TARGET_KERNEL_DIR}/KernelSU"
+fi
+
+# 2. Clone SUSFS repo
+if [[ -n "${SUSFS_REPO:-}" && -n "${SUSFS_COMMIT:-}" ]]; then
+  clone_repo "$SUSFS_REPO" "${SUSFS_REF:-main}" "$SUSFS_COMMIT" "susfs4ksu" "SUSFS repo"
+  echo "[setup] SUSFS source cloned into susfs4ksu"
+fi
+
+# 3. Clone ZeroMount repo
+if [[ -n "${ZEROMOUNT_REPO:-}" && -n "${ZEROMOUNT_COMMIT:-}" ]]; then
+  clone_repo "$ZEROMOUNT_REPO" "${ZEROMOUNT_REF:-main}" "$ZEROMOUNT_COMMIT" "zeromount" "ZeroMount repo"
+  echo "[setup] ZeroMount VFS source cloned into zeromount"
 fi
