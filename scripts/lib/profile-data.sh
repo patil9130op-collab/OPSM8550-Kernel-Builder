@@ -122,8 +122,6 @@ resolve_build_profile() {
 
   UPSTREAM_SOC="$SOC"
   if [[ "$KERNEL_SOURCE" == "OnePlus-Nord-CE4-development" ]]; then
-    # The CE4 project intentionally carries its SM7550/crow support in
-    # sm8550-named kernel and modules repositories.
     UPSTREAM_SOC="sm8550"
   fi
 
@@ -193,8 +191,10 @@ resolve_root_solution() {
     "KernelSU-Next") KSU_TYPE="KernelSU-Next" ;;
     "KernelSU-Next + SUSFS") KSU_TYPE="KernelSU-Next-with-susfs" ;;
     "KowSU") KSU_TYPE="KowSU" ;;
-    "SukiSU Ultra + KPM (experimental)") KSU_TYPE="SukiSU-Ultra-with-KPM" ;;
-    "SukiSU Ultra + KPM + SUSFS + ZeroMount") KSU_TYPE="SukiSU-Ultra-SUSFS-ZeroMount" ;;
+    "SukiSU Ultra") KSU_TYPE="SukiSU-Ultra" ;;
+    "SukiSU Ultra + KPM") KSU_TYPE="SukiSU-Ultra-with-KPM" ;;
+    "SukiSU Ultra + SUSFS") KSU_TYPE="SukiSU-Ultra-with-SUSFS" ;;
+    "SukiSU Ultra + ZeroMount"|"SukiSU Ultra + KPM + SUSFS + ZeroMount") KSU_TYPE="SukiSU-Ultra-with-ZeroMount" ;;
     "ReSukiSU") KSU_TYPE="ReSukiSU" ;;
     "ReSukiSU + susfs") KSU_TYPE="ReSukiSU-with-susfs" ;;
     "ReSukiSU + SUSFS + KPM") KSU_TYPE="ReSukiSU-with-susfs-kpm" ;;
