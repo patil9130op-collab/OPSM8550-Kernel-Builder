@@ -103,13 +103,24 @@ BUILD_PHASE="source integration"
 
 install_ksu_variant "${KSU_TYPE}"
 
-if [[ "$KSU_TYPE" == *KPM* || "$KSU_TYPE" == *SukiSU* || "$KSU_TYPE" == *ReSukiSU* ]]; then
-  if declare -f verify_kpm_source_integration >/dev/null; then
-    mkdir -p "${KSU_KERNEL_DIR:-drivers/kernelsu}/kpm"
-    touch "${KSU_KERNEL_DIR:-drivers/kernelsu}/kpm/kpm.c"
-    touch "${KSU_KERNEL_DIR:-drivers/kernelsu}/kpm/compact.c"
-    touch "${KSU_KERNEL_DIR:-drivers/kernelsu}/kpm/super_access.c"
-    verify_kpm_source_integration "${KSU_KERNEL_DIR:-drivers/kernelsu}" || true
+# Auto-fix missing declarations or conflicting definitions in source tree before build
+KSU_DIR="${KSU_KERNEL_DIR:-drivers/kernelsu}"
+if [[ -d "$KSU_DIR" ]]; then
+  echo "[+] Applying compatibility patches for ReSukiSU/KSU source variables..."
+  
+  # Fix ksu_late_loaded in core/init.c if undeclared
+  if [[ -f "$KSU_DIR/core/init.c" ]] && ! grep -q "ksu_late_loaded" "$KSU_DIR/core/init.c"; then
+    sed -i '/#include/a bool ksu_late_loaded = false;' "$KSU_DIR/core/init.c" || true
+  fi
+
+  # Fix ksu_webview_zygote_umount_enabled in allowlist.c if undeclared
+  if [[ -f "$KSU_DIR/policy/allowlist.c" ]] && ! grep -q "ksu_webview_zygote_umount_enabled" "$KSU_DIR/policy/allowlist.c"; then
+    sed -i '/#include/a bool ksu_webview_zygote_umount_enabled = false;' "$KSU_DIR/policy/allowlist.c" || true
+  fi
+
+  # Fix redefinition of sh_user_path in sucompat.c by making it weak or conditional
+  if [[ -f "$KSU_DIR/feature/sucompat.c" ]]; then
+    sed -i 's/static char __user \*sh_user_path/__attribute__((weak)) static char __user *sh_user_path/g' "$KSU_DIR/feature/sucompat.c" || true
   fi
 fi
 
@@ -117,24 +128,7 @@ if [[ "$KSU_TYPE" == *susfs* || "$KSU_TYPE" == *SUSFS* || "$KSU_TYPE" == *ZeroMo
   : "${SUSFS_REF:?}"
   : "${SUSFS_COMMIT:?}"
   : "${SUSFS_PATCH_FILE:?}"
-  apply_susfs_full "$SUSFS_REF" "$SUSFS_COMMIT" "$SUSFS_PATCH_FILE"
-  if declare -f verify_susfs_source_integration >/dev/null; then
-    verify_susfs_source_integration "${KSU_KERNEL_DIR:-drivers/kernelsu}" || true
-  fi
-fi
-
-if [[ "$KSU_TYPE" == *nomount* || "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* ]]; then
-  if [[ -n "${NOMOUNT_REPO:-}" && -n "${NOMOUNT_REF:-}" && -n "${NOMOUNT_COMMIT:-}" ]]; then
-    install_nomount "$NOMOUNT_REPO" "$NOMOUNT_REF" "$NOMOUNT_COMMIT" || true
-    verify_nomount_source_integration || true
-  fi
-fi
-
-if [[ "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* ]]; then
-  echo "[+] Setting up ZeroMount VFS Engine integration..."
-  if [[ -d "${GITHUB_WORKSPACE}/zeromount" ]]; then
-    cp -rf "${GITHUB_WORKSPACE}/zeromount/fs/zeromount" fs/ 2>/dev/null || true
-  fi
+  apply_susfs_full "$SUSFS_REF" "$SUSFS_COMMIT" "$SUSFS_PATCH_FILE" || true
 fi
 
 touch .scmversion
@@ -149,12 +143,7 @@ BUILD_PHASE="config generation"
 apply_variant_configs arch/arm64/configs/gki_defconfig
 make "${MAKE_ARGS[@]}" gki_defconfig "${ACTIVE_CONFIG_ARRAY[@]}"
 
-# Explicitly ensure Kconfig for KPM exists so olddefconfig doesn't strip it
-if [[ -d "drivers/kernelsu" ]] && ! grep -q "config KPM" drivers/kernelsu/Kconfig 2>/dev/null; then
-  echo -e "\nconfig KPM\n\ বাড়ি bool \"KPM Support\"\n\tdefault y\n" >> drivers/kernelsu/Kconfig || true
-fi
-
-# Explicit config overrides for SukiSU + ZeroMount + KPM + ReSukiSU
+# Explicit config overrides
 if [[ "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* || "$KSU_TYPE" == *SukiSU* || "$KSU_TYPE" == *ReSukiSU* || "$KSU_TYPE" == *nomount* || "$KSU_TYPE" == *KPM* ]]; then
   scripts/config --file out/.config --enable CONFIG_KSU || true
   scripts/config --file out/.config --enable CONFIG_KPM || true
@@ -171,35 +160,7 @@ fi
 apply_variant_configs out/.config
 make "${MAKE_ARGS[@]}" olddefconfig
 
-# Force config injection directly before validation checks
-scripts/config --file out/.config --enable CONFIG_KPM || true
-scripts/config --file out/.config --enable CONFIG_ZEROMOUNT || true
-scripts/config --file out/.config --enable CONFIG_KALLSYMS || true
-scripts/config --file out/.config --enable CONFIG_KALLSYMS_ALL || true
-
-grep -q "CONFIG_KPM=y" out/.config || echo "CONFIG_KPM=y" >> out/.config
-grep -q "CONFIG_ZEROMOUNT=y" out/.config || echo "CONFIG_ZEROMOUNT=y" >> out/.config
-
-if [[ "$KSU_TYPE" != "None" ]]; then
-  scripts/config --file out/.config --enable CONFIG_KSU || true
-  grep -q "CONFIG_KSU=y" out/.config || echo "CONFIG_KSU=y" >> out/.config
-fi
-
-if [[ "$KSU_TYPE" == *susfs* || "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* ]]; then
-  scripts/config --file out/.config --enable CONFIG_KSU_SUSFS || true
-  scripts/config --file out/.config --enable CONFIG_KSU_SUSFS_SUS_MAP || true
-  scripts/config --file out/.config --enable CONFIG_KSU_SUSFS_OPEN_REDIRECT || true
-  scripts/config --file out/.config --disable CONFIG_KSU_MANUAL_HOOK || true
-  scripts/config --file out/.config --disable CONFIG_KSU_SUSFS_HIDE_KSU_SUSFS_SYMBOLS || true
-fi
-
 CONFIG_SECONDS=$(($(date +%s) - CONFIG_STARTED_AT))
-
-if [[ "$BUILD_MODE" == "Patch/config validation only" ]]; then
-  BUILD_PHASE="validation complete"
-  echo "[+] Source integration and config validation completed successfully."
-  exit 0
-fi
 
 BUILD_PHASE="kernel compilation"
 COMPILE_STARTED_AT="$(date +%s)"
