@@ -63,6 +63,18 @@ setup_kernelsu_repo() {
   rm -rf "$driver_dir/kernelsu"
   ln -sfn "$(realpath --relative-to="$driver_dir" "$repo_dir/kernel")" "$driver_dir/kernelsu"
 
+  # Ensure KPM source folder is properly linked/copied inside kernelsu driver directory if it exists in the repo
+  if [[ -d "$repo_dir/kernel/kpm" ]]; then
+    echo "[+] KPM source found natively in kernel directory."
+  elif [[ -d "$repo_dir/kpm" ]]; then
+    echo "[+] Copying KPM source into KernelSU driver directory..."
+    mkdir -p "$driver_dir/kernelsu/kpm"
+    cp -rf "$repo_dir/kpm/"* "$driver_dir/kernelsu/kpm/" 2>/dev/null || true
+  elif [[ -d "$repo_dir/kernel/drivers/kernelsu/kpm" ]]; then
+    mkdir -p "$driver_dir/kernelsu/kpm"
+    cp -rf "$repo_dir/kernel/drivers/kernelsu/kpm/"* "$driver_dir/kernelsu/kpm/" 2>/dev/null || true
+  fi
+
   ensure_line_in_file "$driver_dir/Makefile" 'obj-$(CONFIG_KSU) += kernelsu/'
   insert_line_before_first_match "$driver_dir/Kconfig" "endmenu" "source \"$kconfig_source\""
 
