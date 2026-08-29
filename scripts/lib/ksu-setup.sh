@@ -61,18 +61,33 @@ setup_kernelsu_repo() {
   fi
 
   rm -rf "$driver_dir/kernelsu"
-  ln -sfn "$(realpath --relative-to="$driver_dir" "$repo_dir/kernel")" "$driver_dir/kernelsu"
+  
+  # Handle different ReSukiSU/SukiSU repository layouts where kernel folder might be structured differently
+  if [[ -d "$repo_dir/kernel" ]]; then
+    ln -sfn "$(realpath --relative-to="$driver_dir" "$repo_dir/kernel")" "$driver_dir/kernelsu"
+  elif [[ -d "$repo_dir/drivers/kernelsu" ]]; then
+    ln -sfn "$(realpath --relative-to="$driver_dir" "$repo_dir/drivers/kernelsu")" "$driver_dir/kernelsu"
+  else
+    mkdir -p "$driver_dir/kernelsu"
+    cp -rf "$repo_dir/"* "$driver_dir/kernelsu/" 2>/dev/null || true
+  fi
 
-  # Ensure KPM source folder is properly linked/copied inside kernelsu driver directory if it exists in the repo
+  # Robust KPM source detection and injection
+  echo "[+] Locating and integrating KPM sources..."
+  mkdir -p "$driver_dir/kernelsu/kpm"
+  
   if [[ -d "$repo_dir/kernel/kpm" ]]; then
-    echo "[+] KPM source found natively in kernel directory."
+    cp -rf "$repo_dir/kernel/kpm/"* "$driver_dir/kernelsu/kpm/" 2>/dev/null || true
   elif [[ -d "$repo_dir/kpm" ]]; then
-    echo "[+] Copying KPM source into KernelSU driver directory..."
-    mkdir -p "$driver_dir/kernelsu/kpm"
     cp -rf "$repo_dir/kpm/"* "$driver_dir/kernelsu/kpm/" 2>/dev/null || true
-  elif [[ -d "$repo_dir/kernel/drivers/kernelsu/kpm" ]]; then
-    mkdir -p "$driver_dir/kernelsu/kpm"
-    cp -rf "$repo_dir/kernel/drivers/kernelsu/kpm/"* "$driver_dir/kernelsu/kpm/" 2>/dev/null || true
+  elif [[ -d "$driver_dir/kernelsu/kpm" ]]; then
+    : # Already present
+  else
+    # Universal fallback search using find command for kpm.c
+    KPM_SRC_DIR="$(find "$repo_dir" -type d -name "kpm" | head -n 1)"
+    if [[ -n "$KPM_SRC_DIR" && -f "$KPM_SRC_DIR/kpm.c" ]]; then
+      cp -rf "$KPM_SRC_DIR/"* "$driver_dir/kernelsu/kpm/" 2>/dev/null || true
+    fi
   fi
 
   ensure_line_in_file "$driver_dir/Makefile" 'obj-$(CONFIG_KSU) += kernelsu/'
@@ -122,3 +137,4 @@ install_ksu_variant() {
       ;;
   esac
 }
+
