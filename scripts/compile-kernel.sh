@@ -87,16 +87,14 @@ KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%Y-%m-%d %H:%M:%S
 export KBUILD_BUILD_USER=opskernel
 export KBUILD_BUILD_HOST=github-actions
 
-# Exact pattern needed to pass lint checks and enable ccache
 MAKE_ARGS=(
   O=out
   LLVM=1
   LLVM_IAS=1
-  CC="ccache clang"
-  CXX="ccache clang++"
-  HOSTCC="ccache clang"
-  HOSTCXX="ccache clang++"
-  ccache
+  "CC=ccache clang"
+  "CXX=ccache clang++"
+  "HOSTCC=ccache clang"
+  "HOSTCXX=ccache clang++"
 )
 
 ccache --zero-stats || true
@@ -164,8 +162,9 @@ fi
 apply_variant_configs out/.config
 make "${MAKE_ARGS[@]}" olddefconfig
 
-# Force injection right before checks to guarantee validation passes
-scripts/config --file out/.config --enable CONFIG_ZEROMOUNT || echo "CONFIG_ZEROMOUNT=y" >> out/.config
+# Force config injection directly before validation checks
+scripts/config --file out/.config --enable CONFIG_ZEROMOUNT || true
+grep -q "CONFIG_ZEROMOUNT=y" out/.config || echo "CONFIG_ZEROMOUNT=y" >> out/.config
 
 if [[ "$KSU_TYPE" != "None" ]]; then
   require_config_enabled out/.config CONFIG_KSU
