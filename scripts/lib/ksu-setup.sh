@@ -95,16 +95,15 @@ install_ksu_variant() {
       : "${KSU_COMMIT:?KSU_COMMIT must be resolved for KernelSU-Next with SUSFS}"
       setup_kernelsu_repo "pershoot" "KernelSU-Next" "$KSU_COMMIT"
       ;;
-    "SukiSU-Ultra-with-KPM")
+    "SukiSU-Ultra"|"SukiSU-Ultra-with-KPM"|"SukiSU-Ultra-with-SUSFS"|"SukiSU-Ultra-with-ZeroMount")
       : "${KSU_COMMIT:?KSU_COMMIT must be resolved for SukiSU Ultra}"
-      setup_kernelsu_repo "SukiSU-Ultra" "SukiSU-Ultra" "$KSU_COMMIT"
+      setup_kernelsu_repo "SukiSU-Ultra" "SukiSU-Ultra" "$KSU_COMMIT" "1"
       ;;
     "ReSukiSU"|"ReSukiSU-with-susfs"|"ReSukiSU-with-susfs-nomount")
       : "${KSU_COMMIT:?KSU_COMMIT must be resolved for ReSukiSU}"
       setup_kernelsu_repo "ReSukiSU" "ReSukiSU" "$KSU_COMMIT"
       ;;
     "ReSukiSU-with-susfs-kpm")
-      # ReSukiSU v4.1.0 (with KPM code support)
       KSU_COMMIT_TARGET="${KSU_COMMIT:-v4.1.0}"
       setup_kernelsu_repo "ReSukiSU" "ReSukiSU" "$KSU_COMMIT_TARGET" "1"
       ;;
