@@ -52,18 +52,21 @@ on:
         description: KernelSU / root add-on preset
         required: true
         type: choice
-        default: No root changes
+        default: SukiSU Ultra + KPM + SUSFS + ZeroMount
         options:
-          - No root changes
-          - Official KernelSU
-          - KernelSU-Next
-          - KernelSU-Next + SUSFS
-          - KowSU
+          - SukiSU Ultra + KPM + SUSFS + ZeroMount
           - SukiSU Ultra + KPM (experimental)
-          - ReSukiSU
-          - ReSukiSU + susfs
+          - SukiSU Ultra + SUSFS
+          - SukiSU Ultra
+          - KernelSU-Next + SUSFS
+          - KernelSU-Next
+          - KowSU
+          - Official KernelSU
           - ReSukiSU + SUSFS + KPM
           - ReSukiSU + SUSFS + NoMount (experimental)
+          - ReSukiSU + susfs
+          - ReSukiSU
+          - No root changes
       build_mode:
         description: Validate quickly, keep an artifact, or also publish a release
         required: true
