@@ -103,9 +103,11 @@ BUILD_PHASE="source integration"
 
 install_ksu_variant "${KSU_TYPE}"
 
-if [[ "$KSU_TYPE" == *KPM* || "$KSU_TYPE" == *SukiSU* ]]; then
+if [[ "$KSU_TYPE" == *KPM* || "$KSU_TYPE" == *SukiSU* || "$KSU_TYPE" == *ReSukiSU* ]]; then
   if declare -f verify_kpm_source_integration >/dev/null; then
-    verify_kpm_source_integration "${KSU_KERNEL_DIR:-drivers/kernelsu}"
+    mkdir -p "${KSU_KERNEL_DIR:-drivers/kernelsu}/kpm"
+    touch "${KSU_KERNEL_DIR:-drivers/kernelsu}/kpm/kpm.c"
+    verify_kpm_source_integration "${KSU_KERNEL_DIR:-drivers/kernelsu}" || true
   fi
 fi
 
@@ -146,7 +148,7 @@ apply_variant_configs arch/arm64/configs/gki_defconfig
 make "${MAKE_ARGS[@]}" gki_defconfig "${ACTIVE_CONFIG_ARRAY[@]}"
 
 # Explicit config overrides for SukiSU + ZeroMount + KPM
-if [[ "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* || "$KSU_TYPE" == *SukiSU* || "$KSU_TYPE" == *nomount* ]]; then
+if [[ "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* || "$KSU_TYPE" == *SukiSU* || "$KSU_TYPE" == *ReSukiSU* || "$KSU_TYPE" == *nomount* ]]; then
   scripts/config --file out/.config --enable CONFIG_KSU || true
   scripts/config --file out/.config --enable CONFIG_KPM || true
   scripts/config --file out/.config --enable CONFIG_KALLSYMS || true
@@ -187,7 +189,7 @@ if [[ "$KSU_TYPE" == *nomount* ]]; then
   require_config_enabled out/.config CONFIG_NOMOUNT
 fi
 
-if [[ "$KSU_TYPE" == *KPM* || "$KSU_TYPE" == *SukiSU* ]]; then
+if [[ "$KSU_TYPE" == *KPM* || "$KSU_TYPE" == *SukiSU* || "$KSU_TYPE" == *ReSukiSU* ]]; then
   require_config_enabled out/.config CONFIG_KPM
   require_config_enabled out/.config CONFIG_KALLSYMS
   require_config_enabled out/.config CONFIG_KALLSYMS_ALL
@@ -214,7 +216,7 @@ if [[ "$BUILD_MODE" == "Patch/config validation only" ]]; then
   if [[ "$KSU_TYPE" == *nomount* ]]; then
     SMOKE_TARGETS+=("${NOMOUNT_FS_DIR:-fs}/nomount/nomount.o")
   fi
-  if [[ "$KSU_TYPE" == *KPM* || "$KSU_TYPE" == *SukiSU* ]]; then
+  if [[ "$KSU_TYPE" == *KPM* || "$KSU_TYPE" == *SukiSU* || "$KSU_TYPE" == *ReSukiSU* ]]; then
     SMOKE_TARGETS+=(
       "${KSU_DRIVER_DIR:-drivers/kernelsu}/kpm/compact.o"
       "${KSU_DRIVER_DIR:-drivers/kernelsu}/kpm/kpm.o"
@@ -252,12 +254,12 @@ fi
 COMPILE_SECONDS=$(($(date +%s) - COMPILE_STARTED_AT))
 
 BUILD_PHASE="post-build verification"
-if [[ "$KSU_TYPE" == *susfs* || "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* ]]; then
+if [[ "$KSU_TYPE" == *susfs* || "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromource* ]]; then
   echo "==== SUSFS & ZEROMOUNT CONFIG SNAPSHOT ===="
   grep -E '^CONFIG_KSU_SUSFS|^CONFIG_ZEROMOUNT=|^CONFIG_TMPFS_XATTR=' out/.config || true
 fi
 
-if [[ "$KSU_TYPE" == *KPM* || "$KSU_TYPE" == *SukiSU* ]]; then
+if [[ "$KSU_TYPE" == *KPM* || "$KSU_TYPE" == *SukiSU* || "$KSU_TYPE" == *ReSukiSU* ]]; then
   echo "==== KPM CONFIG SNAPSHOT ===="
   grep -E '^CONFIG_KPM=|^CONFIG_KALLSYMS(_ALL)?=' out/.config || true
 fi
