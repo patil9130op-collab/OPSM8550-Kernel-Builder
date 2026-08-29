@@ -100,8 +100,9 @@ install_ksu_variant() {
       setup_kernelsu_repo "SukiSU-Ultra" "SukiSU-Ultra" "$KSU_COMMIT_TARGET" "1"
       ;;
     "ReSukiSU"*)
-      KSU_COMMIT_TARGET="${KSU_COMMIT:-main}"
-      setup_kernelsu_repo "ReSukiSU" "ReSukiSU" "$KSU_COMMIT_TARGET" "1"
+      # Force ReSukiSU to lock to v4.1.0 version to prevent automatic upgrade to v4.2 hook errors
+      KSU_COMMIT_TARGET="${KSU_COMMIT:-v4.1.0}"
+      setup_kernelsu_repo "ReSukiSU" "ReSukiSU" "$KSU_COMMIT_TARGET" "0"
       ;;
     *)
       echo "::error::Unsupported ksu_type: $ksu_type"
