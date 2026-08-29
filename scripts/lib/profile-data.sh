@@ -194,6 +194,7 @@ resolve_root_solution() {
     "KernelSU-Next + SUSFS") KSU_TYPE="KernelSU-Next-with-susfs" ;;
     "KowSU") KSU_TYPE="KowSU" ;;
     "SukiSU Ultra + KPM (experimental)") KSU_TYPE="SukiSU-Ultra-with-KPM" ;;
+    "SukiSU Ultra + KPM + SUSFS + ZeroMount") KSU_TYPE="SukiSU-Ultra-SUSFS-ZeroMount" ;;
     "ReSukiSU") KSU_TYPE="ReSukiSU" ;;
     "ReSukiSU + susfs") KSU_TYPE="ReSukiSU-with-susfs" ;;
     "ReSukiSU + SUSFS + KPM") KSU_TYPE="ReSukiSU-with-susfs-kpm" ;;
