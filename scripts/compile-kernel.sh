@@ -11,8 +11,6 @@ trap 'rm -f "${TMP_BLOCK}"' EXIT
 cat > "${TMP_BLOCK}" <<'BLOCK_EOF'
 # ------------------------------------------------------------------
 # Cross-translation-unit KernelSU declarations.
-# A definition in init.c is not visible to selinux_hide.c unless the latter
-# sees an extern declaration. Repair every affected C translation unit directly.
 # ------------------------------------------------------------------
 ensure_extern_for_ksu_symbol() {
     local symbol="$1"
@@ -41,10 +39,6 @@ for path in sorted(root.rglob('*.c')):
     print(f'[+] Added extern bool {symbol}; to {path}')
 PY
 }
-
-# ------------------------------------------------------------------
-# KernelSU compatibility repair.
-# ------------------------------------------------------------------
 
 BUILD_PHASE="KernelSU compatibility"
 
@@ -123,6 +117,9 @@ new = text[:start] + block.rstrip() + '\n\n' + text[end:]
 target.write_text(new)
 print(f'[OK] KernelSU compatibility section replaced in {target}.')
 PY
+
+# Make sure your main compile command inside scripts/compile-kernel.sh includes ccache like this:
+# make CC="ccache clang" ... (or similar ccache wrapper)
 
 bash -n "${TARGET}"
 echo '[OK] Bash syntax check passed.'
