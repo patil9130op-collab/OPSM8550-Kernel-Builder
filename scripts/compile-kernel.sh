@@ -103,36 +103,63 @@ BUILD_PHASE="source integration"
 
 install_ksu_variant "${KSU_TYPE}"
 
-# Robust auto-fix for ReSukiSU compilation symbol errors
+# Automated Python Patcher for ReSukiSU + SuSFS + KPM + VFS Drivers
 KSU_DIR="${KSU_KERNEL_DIR:-drivers/kernelsu}"
 if [[ -d "$KSU_DIR" ]]; then
-  echo "[+] Fixing ReSukiSU missing symbols and redefinitions..."
+  echo "[+] Applying automated Python patcher for ReSukiSU/KPM/VFS symbols..."
+  python3 -c "
+import os
 
-  # 1. Define ksu_late_loaded and ksu_webview_zygote_umount_enabled properly if missing
-  if [[ -f "$KSU_DIR/core/init.c" ]] && ! grep -q "bool ksu_late_loaded" "$KSU_DIR/core/init.c"; then
-    sed -i 's/#include/bool ksu_late_loaded = false;\nbool ksu_webview_zygote_umount_enabled = false;\n#include/' "$KSU_DIR/core/init.c" || true
-  fi
+ksu_path = '$KSU_DIR'
 
-  # 2. Fix allowlist.c reference if needed
-  if [[ -f "$KSU_DIR/policy/allowlist.c" ]] && ! grep -q "ksu_webview_zygote_umount_enabled" "$KSU_DIR/policy/allowlist.c"; then
-    sed -i 's/#include/extern bool ksu_webview_zygote_umount_enabled;\n#include/' "$KSU_DIR/policy/allowlist.c" || true
-  fi
+# 1. Inject ksu_late_loaded in init.c if missing
+init_file = os.path.join(ksu_path, 'core/init.c')
+if os.path.exists(init_file):
+    with open(init_file, 'r') as f:
+        content = f.read()
+    if 'ksu_late_loaded' not in content:
+        idx = content.find('#include')
+        if idx != -1:
+            line_end = content.find('\n', idx)
+            content = content[:line_end] + '\nbool ksu_late_loaded = false;\n' + content[line_end:]
+            with open(init_file, 'w') as f:
+                f.write(content)
 
-  # 3. Clean up previous weak patch on sucompat.c and resolve redefinition cleanly
-  if [[ -f "$KSU_DIR/feature/sucompat.c" ]]; then
-    sed -i 's/__attribute__((weak))//g' "$KSU_DIR/feature/sucompat.c" || true
-    # Comment out duplicate static definition of sh_user_path if it appears twice
-    python3 -c "
-path = '$KSU_DIR/feature/sucompat.c'
-with open(path, 'r') as f:
-    content = f.read()
-if content.count('static char __user *sh_user_path') > 1:
-    parts = content.split('static char __user *sh_user_path(void)')
-    new_content = parts[0] + 'static char __user *sh_user_path(void)' + ''.join(parts[1:])
-    # Keep only the first definition, replace subsequent ones or wrap in #ifndef
-    print('[*] Cleaning duplicate sh_user_path definitions')
+# 2. Inject ksu_webview_zygote_umount_enabled in allowlist.c if missing
+allowlist_file = os.path.join(ksu_path, 'policy/allowlist.c')
+if os.path.exists(allowlist_file):
+    with open(allowlist_file, 'r') as f:
+        content = f.read()
+    if 'ksu_webview_zygote_umount_enabled' not in content:
+        idx = content.find('#include')
+        if idx != -1:
+            line_end = content.find('\n', idx)
+            content = content[:line_end] + '\nbool ksu_webview_zygote_umount_enabled = false;\n' + content[line_end:]
+            with open(allowlist_file, 'w') as f:
+                f.write(content)
+
+# 3. Handle duplicate sh_user_path definition in sucompat.c cleanly
+sucompat_file = os.path.join(ksu_path, 'feature/sucompat.c')
+if os.path.exists(sucompat_file):
+    with open(sucompat_file, 'r') as f:
+        lines = f.readlines()
+    
+    new_lines = []
+    found_first = False
+    for line in lines:
+        if 'static char __user *sh_user_path' in line:
+            if not found_first:
+                found_first = True
+                new_lines.append(line)
+            else:
+                new_lines.append('/* Duplicate definition handled: ' + line.strip() + ' */\n')
+        else:
+            new_lines.append(line)
+            
+    with open(sucompat_file, 'w') as f:
+        f.writelines(new_lines)
+print('[*] Source files successfully patched for ReSukiSU/KPM/VFS.')
 " || true
-  fi
 fi
 
 if [[ "$KSU_TYPE" == *susfs* || "$KSU_TYPE" == *SUSFS* || "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* || "$KSU_TYPE" == *nomount* ]]; then
@@ -154,7 +181,7 @@ BUILD_PHASE="config generation"
 apply_variant_configs arch/arm64/configs/gki_defconfig
 make "${MAKE_ARGS[@]}" gki_defconfig "${ACTIVE_CONFIG_ARRAY[@]}"
 
-# Explicit config overrides
+# Explicit config overrides for KSU, SuSFS, KPM, and VFS / ZeroMount
 if [[ "$KSU_TYPE" == *ZeroMount* || "$KSU_TYPE" == *zeromount* || "$KSU_TYPE" == *SukiSU* || "$KSU_TYPE" == *ReSukiSU* || "$KSU_TYPE" == *nomount* || "$KSU_TYPE" == *KPM* ]]; then
   scripts/config --file out/.config --enable CONFIG_KSU || true
   scripts/config --file out/.config --enable CONFIG_KPM || true
