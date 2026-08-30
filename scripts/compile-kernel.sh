@@ -9,25 +9,16 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # shellcheck source=lib/git-helpers.sh
 . "${SCRIPT_DIR}/lib/git-helpers.sh"
-
 # shellcheck source=lib/kernel-helpers.sh
 . "${SCRIPT_DIR}/lib/kernel-helpers.sh"
-
 # shellcheck source=lib/ksu-setup.sh
 . "${SCRIPT_DIR}/lib/ksu-setup.sh"
-
 # shellcheck source=lib/susfs-apply.sh
 . "${SCRIPT_DIR}/lib/susfs-apply.sh"
-
 # shellcheck source=lib/nomount-setup.sh
 . "${SCRIPT_DIR}/lib/nomount-setup.sh"
-
 # shellcheck source=lib/verify.sh
 . "${SCRIPT_DIR}/lib/verify.sh"
-
-# ============================================================
-# REQUIRED ENVIRONMENT
-# ============================================================
 
 : "${GITHUB_WORKSPACE:?}"
 : "${GITHUB_STEP_SUMMARY:?}"
@@ -41,10 +32,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${KERNEL_COMMIT:?}"
 : "${BUILD_MODE:?}"
 
-# ============================================================
-# BUILD TIMING
-# ============================================================
-
 BUILD_STARTED_AT="$(date +%s)"
 CONFIG_SECONDS=0
 COMPILE_SECONDS=0
@@ -54,27 +41,22 @@ publish_performance_summary() {
     local status="$?"
     local finished_at
     local elapsed
-    local result
 
     trap - EXIT
-
     finished_at="$(date +%s)"
     elapsed=$((finished_at - BUILD_STARTED_AT))
 
-    if [[ "${status}" -eq 0 ]]; then
-        result="success"
-    else
-        result="failure"
-    fi
-
     {
         echo "### Build performance"
-        echo "- Result: ${result}"
+        if [[ "${status}" -eq 0 ]]; then
+            echo "- Result: success"
+        else
+            echo "- Result: failure"
+        fi
         echo "- Last phase: ${BUILD_PHASE}"
         echo "- Config/patch time: ${CONFIG_SECONDS}s"
         echo "- Compile time: ${COMPILE_SECONDS}s"
         echo "- Script total: ${elapsed}s"
-
         if command -v ccache >/dev/null 2>&1; then
             echo
             echo '```text'
@@ -88,19 +70,12 @@ publish_performance_summary() {
 
 trap publish_performance_summary EXIT
 
-# ============================================================
-# TOOLCHAIN
-# ============================================================
-
 CLANG_ROOT="${GITHUB_WORKSPACE}/toolchains/${CLANG_VERSION}/bin"
-
 export PATH="${CLANG_ROOT}:${PATH}"
-
 export ARCH=arm64
 export SUBARCH=arm64
 export LLVM=1
 export LLVM_IAS=1
-
 export CCACHE_DIR="${GITHUB_WORKSPACE}/.ccache"
 export CCACHE_BASEDIR="${GITHUB_WORKSPACE}"
 export CCACHE_NOHASHDIR=true
@@ -108,30 +83,16 @@ export CCACHE_COMPILERCHECK=content
 export CCACHE_COMPRESS=true
 export CCACHE_COMPRESSLEVEL=6
 export CCACHE_MAXSIZE=3G
-
 mkdir -p "${CCACHE_DIR}"
-
-# ============================================================
-# KERNEL SOURCE
-# ============================================================
 
 cd "${SOC}"
 
 SOURCE_DATE_EPOCH="$(git show -s --format=%ct "${KERNEL_COMMIT}")"
-
 export SOURCE_DATE_EPOCH
-
-KBUILD_BUILD_TIMESTAMP="$(
-    date -u -d "@${SOURCE_DATE_EPOCH}" '+%Y-%m-%d %H:%M:%S UTC'
-)"
-
+KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%Y-%m-%d %H:%M:%S UTC')"
 export KBUILD_BUILD_TIMESTAMP
 export KBUILD_BUILD_USER=opskernel
 export KBUILD_BUILD_HOST=github-actions
-
-# ============================================================
-# MAKE ARGUMENTS
-# ============================================================
 
 MAKE_ARGS=(
     O=out
@@ -145,14 +106,9 @@ MAKE_ARGS=(
 
 ccache --zero-stats || true
 
-# ============================================================
-# SOURCE INTEGRATION
-# ============================================================
-
 CONFIG_STARTED_AT="$(date +%s)"
 BUILD_PHASE="source integration"
 
-echo
 echo "============================================================"
 echo "[+] Installing KernelSU"
 echo "    TYPE: ${KSU_TYPE}"
@@ -163,16 +119,11 @@ install_ksu_variant "${KSU_TYPE}"
 KSU_DIR="${KSU_KERNEL_DIR:-drivers/kernelsu}"
 
 if [[ ! -d "${KSU_DIR}" ]]; then
-    echo "[!] ERROR: KernelSU directory not found:"
-    echo "    ${KSU_DIR}"
+    echo "[!] ERROR: KernelSU directory not found: ${KSU_DIR}"
     exit 1
 fi
 
 echo "[OK] KernelSU directory: ${KSU_DIR}"
-
-# ============================================================
-# APPLY SUSFS
-# ============================================================
 
 if [[ "${KSU_TYPE}" == *susfs* ||
       "${KSU_TYPE}" == *SUSFS* ||
@@ -184,7 +135,6 @@ if [[ "${KSU_TYPE}" == *susfs* ||
     : "${SUSFS_COMMIT:?}"
     : "${SUSFS_PATCH_FILE:?}"
 
-    echo
     echo "============================================================"
     echo "[+] Applying SUSFS"
     echo "    REF    : ${SUSFS_REF}"
@@ -192,299 +142,197 @@ if [[ "${KSU_TYPE}" == *susfs* ||
     echo "    PATCH  : ${SUSFS_PATCH_FILE}"
     echo "============================================================"
 
-    if ! apply_susfs_full \
+    apply_susfs_full \
         "${SUSFS_REF}" \
         "${SUSFS_COMMIT}" \
-        "${SUSFS_PATCH_FILE}"; then
-
-        echo "[!] SUSFS patch reported conflicts."
-        echo "[!] The SUSFS helper must resolve compatible rejects."
-        exit 1
-    fi
+        "${SUSFS_PATCH_FILE}"
 
     echo "[OK] SUSFS integration finished."
 fi
 
-# ============================================================
-# KERNELSU FILE PATHS
-# ============================================================
+# ------------------------------------------------------------------
+# KernelSU compatibility repair.
+#
+# Important:
+#   Do NOT use "sed -i '1i ...'" here. Some KSU files begin with a
+#   block comment, so that puts the declaration inside the comment.
+#   Instead, insert declarations after the include section.
+# ------------------------------------------------------------------
+
+BUILD_PHASE="KernelSU compatibility"
 
 INIT_C="${KSU_DIR}/core/init.c"
 ALLOWLIST_C="${KSU_DIR}/policy/allowlist.c"
 SUCOMPAT_C="${KSU_DIR}/feature/sucompat.c"
 
-# ============================================================
-# KSU COMPATIBILITY
-# ============================================================
+insert_global_definition() {
+    local file="$1"
+    local symbol="$2"
+    local definition="$3"
 
-BUILD_PHASE="KernelSU compatibility"
+    python3 - "${file}" "${symbol}" "${definition}" <<'PY'
+import re
+import sys
 
-echo
-echo "============================================================"
-echo "[+] KernelSU compatibility verification"
-echo "============================================================"
+path, symbol, definition = sys.argv[1], sys.argv[2], sys.argv[3]
 
-# ============================================================
-# ksu_late_loaded
-# ============================================================
+with open(path, "r", encoding="utf-8") as f:
+    text = f.read()
 
+# A real global definition/declaration anywhere in this C file.
+# Ignore comments and string literals by requiring the symbol to appear
+# in a normal declaration-like line.
+decl_re = re.compile(
+    rf'(?m)^[ \t]*(?:(?:static|extern|const|volatile|__init|__read_mostly)[ \t]+)*'
+    rf'(?:bool|int|unsigned[ \t]+int)[ \t]+{re.escape(symbol)}[ \t]*(?:=[^;]+)?;[ \t]*$'
+)
+
+matches = list(decl_re.finditer(text))
+
+if matches:
+    print(f"[OK] {symbol}: existing declaration/definition found ({len(matches)}).")
+    if len(matches) > 1:
+        print(f"[!] ERROR: {symbol} has multiple declaration-like definitions in {path}.")
+        for m in matches:
+            line = text.count("\n", 0, m.start()) + 1
+            print(f"    line {line}: {m.group(0).strip()}")
+        sys.exit(1)
+    sys.exit(0)
+
+# Find the last #include in the file header. This guarantees the type
+# 'bool' and kernel types are already available and avoids block comments.
+include_matches = list(re.finditer(r'(?m)^[ \t]*#include[^\n]*\n', text))
+
+if include_matches:
+    pos = include_matches[-1].end()
+else:
+    # Fallback: insert after leading comments/shebang/preprocessor area.
+    pos = 0
+    while True:
+        m = re.match(r'(?s)(?:\s|/\*.*?\*/|//[^\n]*\n)*', text[pos:])
+        if not m or m.end() == 0:
+            break
+        pos += m.end()
+
+new_text = text[:pos] + "\n" + definition + "\n" + text[pos:]
+
+with open(path, "w", encoding="utf-8") as f:
+    f.write(new_text)
+
+print(f"[+] {symbol}: inserted after the include/header section.")
+PY
+}
+
+# ksu_late_loaded must be a real definition, not a declaration hidden
+# inside the file's opening comment.
 if [[ -f "${INIT_C}" ]]; then
-
-    KSU_LATE_COUNT="$(
-        grep -RhsE \
-            '^[[:space:]]*(static[[:space:]]+)?bool[[:space:]]+ksu_late_loaded[[:space:]]*;' \
-            "${KSU_DIR}" 2>/dev/null |
-        wc -l
-    )"
-
-    echo "[*] ksu_late_loaded declarations: ${KSU_LATE_COUNT}"
-
-    if [[ "${KSU_LATE_COUNT}" -eq 0 ]]; then
-
-        echo "[+] Adding missing ksu_late_loaded declaration."
-
-        sed -i \
-            '1i bool ksu_late_loaded;' \
-            "${INIT_C}"
-
-    elif [[ "${KSU_LATE_COUNT}" -eq 1 ]]; then
-
-        echo "[OK] ksu_late_loaded declaration found."
-
-    else
-
-        echo "[!] ERROR: Multiple ksu_late_loaded declarations found."
-
-        grep -Rnw "${KSU_DIR}" \
-            -e "ksu_late_loaded" 2>/dev/null || true
-
-        exit 1
-    fi
+    insert_global_definition \
+        "${INIT_C}" \
+        "ksu_late_loaded" \
+        "bool ksu_late_loaded = false;"
 fi
 
-# ============================================================
-# ksu_webview_zygote_umount_enabled
-# ============================================================
-
+# WebView zygote flag is handled the same way.
 if [[ -f "${ALLOWLIST_C}" ]]; then
-
-    WEBVIEW_COUNT="$(
-        grep -RhsE \
-            '^[[:space:]]*(static[[:space:]]+)?bool[[:space:]]+ksu_webview_zygote_umount_enabled[[:space:]]*=' \
-            "${KSU_DIR}" 2>/dev/null |
-        wc -l
-    )"
-
-    echo "[*] ksu_webview_zygote_umount_enabled definitions: ${WEBVIEW_COUNT}"
-
-    if [[ "${WEBVIEW_COUNT}" -eq 0 ]]; then
-
-        echo "[+] Adding missing ksu_webview_zygote_umount_enabled."
-
-        sed -i \
-            '1i bool ksu_webview_zygote_umount_enabled = false;' \
-            "${ALLOWLIST_C}"
-
-    elif [[ "${WEBVIEW_COUNT}" -eq 1 ]]; then
-
-        echo "[OK] ksu_webview_zygote_umount_enabled definition found."
-
-    else
-
-        echo "[!] ERROR: Multiple ksu_webview_zygote_umount_enabled definitions found."
-
-        grep -Rnw "${KSU_DIR}" \
-            -e "ksu_webview_zygote_umount_enabled" 2>/dev/null || true
-
-        exit 1
-    fi
+    insert_global_definition \
+        "${ALLOWLIST_C}" \
+        "ksu_webview_zygote_umount_enabled" \
+        "bool ksu_webview_zygote_umount_enabled = false;"
 fi
 
-# ============================================================
-# sh_user_path compatibility
-# ============================================================
+# ------------------------------------------------------------------
+# Remove duplicate sh_user_path() implementations safely.
+# ------------------------------------------------------------------
 
 if [[ -f "${SUCOMPAT_C}" ]]; then
-
-    echo
-    echo "============================================================"
-    echo "[+] Checking sh_user_path"
-    echo "============================================================"
-
     python3 - "${SUCOMPAT_C}" <<'PY'
 import re
 import sys
 
 path = sys.argv[1]
 
-with open(path, "r", encoding="utf-8") as fh:
-    source = fh.read()
+with open(path, "r", encoding="utf-8") as f:
+    source = f.read()
 
-signature = re.compile(
+sig = re.compile(
     r'(?m)^[ \t]*'
-    r'(?:__attribute__\s*\(\(\s*weak\s*\)\)\s*)?'
-    r'(?:static\s+)?'
-    r'(?:inline\s+)?'
-    r'(?:__always_inline\s+)?'
-    r'char\s+__user\s*\*\s*'
-    r'sh_user_path\s*\(\s*void\s*\)'
+    r'(?:(?:__attribute__\s*\(\(\s*weak\s*\)\)\s*)|(?:static\s+))?'
+    r'char\s+__user\s*\*\s*sh_user_path\s*\(\s*void\s*\)'
 )
 
+matches = list(sig.finditer(source))
+print(f"[*] sh_user_path signatures found: {len(matches)}")
 
-def find_open_brace(text, start):
-    i = start
-    n = len(text)
+if len(matches) <= 1:
+    print("[OK] sh_user_path() is not duplicated.")
+    sys.exit(0)
 
-    line_comment = False
-    block_comment = False
-    string = False
-    char = False
-    escaped = False
-
-    while i < n:
-        c = text[i]
-        nxt = text[i + 1] if i + 1 < n else ""
-
-        if line_comment:
-            if c == "\n":
-                line_comment = False
-            i += 1
-            continue
-
-        if block_comment:
-            if c == "*" and nxt == "/":
-                block_comment = False
-                i += 2
-            else:
-                i += 1
-            continue
-
-        if string:
-            if escaped:
-                escaped = False
-            elif c == "\\":
-                escaped = True
-            elif c == '"':
-                string = False
-            i += 1
-            continue
-
-        if char:
-            if escaped:
-                escaped = False
-            elif c == "\\":
-                escaped = True
-            elif c == "'":
-                char = False
-            i += 1
-            continue
-
-        if c == "/" and nxt == "/":
-            line_comment = True
-            i += 2
-            continue
-
-        if c == "/" and nxt == "*":
-            block_comment = True
-            i += 2
-            continue
-
-        if c == '"':
-            string = True
-            i += 1
-            continue
-
-        if c == "'":
-            char = True
-            i += 1
-            continue
-
-        if c == "{":
-            return i
-
-        if c == ";":
-            return None
-
-        i += 1
-
-    return None
-
-
-def find_function_end(text, opening):
+def scan_end(text, brace):
     depth = 0
-    i = opening
+    i = brace
     n = len(text)
-
-    line_comment = False
-    block_comment = False
-    string = False
-    char = False
+    state = "code"
     escaped = False
 
     while i < n:
         c = text[i]
         nxt = text[i + 1] if i + 1 < n else ""
 
-        if line_comment:
+        if state == "line":
             if c == "\n":
-                line_comment = False
+                state = "code"
             i += 1
             continue
 
-        if block_comment:
+        if state == "block":
             if c == "*" and nxt == "/":
-                block_comment = False
+                state = "code"
                 i += 2
             else:
                 i += 1
             continue
 
-        if string:
+        if state == "string":
             if escaped:
                 escaped = False
             elif c == "\\":
                 escaped = True
             elif c == '"':
-                string = False
+                state = "code"
             i += 1
             continue
 
-        if char:
+        if state == "char":
             if escaped:
                 escaped = False
             elif c == "\\":
                 escaped = True
             elif c == "'":
-                char = False
+                state = "code"
             i += 1
             continue
 
         if c == "/" and nxt == "/":
-            line_comment = True
+            state = "line"
             i += 2
             continue
-
         if c == "/" and nxt == "*":
-            block_comment = True
+            state = "block"
             i += 2
             continue
-
         if c == '"':
-            string = True
+            state = "string"
             i += 1
             continue
-
         if c == "'":
-            char = True
+            state = "char"
             i += 1
             continue
 
         if c == "{":
             depth += 1
-
         elif c == "}":
             depth -= 1
-
             if depth == 0:
                 return i + 1
 
@@ -492,117 +340,100 @@ def find_function_end(text, opening):
 
     return None
 
+ranges = []
 
-matches = list(signature.finditer(source))
+for m in matches:
+    i = m.end()
 
-print("[*] sh_user_path signatures found:", len(matches))
+    # Find the first real opening brace after the signature.
+    while i < len(source) and source[i] != "{":
+        i += 1
 
-definitions = []
-
-for match in matches:
-
-    brace = find_open_brace(source, match.end())
-
-    if brace is None:
-        continue
-
-    end = find_function_end(source, brace)
-
-    if end is None:
-        print("[!] ERROR: Unmatched sh_user_path function.")
+    if i >= len(source):
+        print("[!] ERROR: opening brace for sh_user_path() not found.")
         sys.exit(1)
 
-    definitions.append((match.start(), end))
+    end = scan_end(source, i)
+    if end is None:
+        print("[!] ERROR: closing brace for sh_user_path() not found.")
+        sys.exit(1)
 
+    ranges.append((m.start(), end))
 
-print("[*] sh_user_path implementations found:", len(definitions))
-
-if len(definitions) == 0:
-    print("[!] ERROR: sh_user_path implementation not found.")
-    sys.exit(1)
-
-if len(definitions) == 1:
-    print("[OK] Single sh_user_path implementation found.")
-    sys.exit(0)
-
-print("[!] Duplicate sh_user_path implementations found.")
+print("[!] Duplicate sh_user_path() implementations detected.")
 print("[+] Keeping the first implementation.")
 
-for start, end in reversed(definitions[1:]):
+for start, end in reversed(ranges[1:]):
     source = source[:start] + source[end:]
 
-with open(path, "w", encoding="utf-8") as fh:
-    fh.write(source)
+with open(path, "w", encoding="utf-8") as f:
+    f.write(source)
 
-verify_matches = list(signature.finditer(source))
-verify_definitions = []
+final_count = len(list(sig.finditer(source)))
+print(f"[+] sh_user_path() definitions after cleanup: {final_count}")
 
-for match in verify_matches:
-
-    brace = find_open_brace(source, match.end())
-
-    if brace is None:
-        continue
-
-    end = find_function_end(source, brace)
-
-    if end is not None:
-        verify_definitions.append((match.start(), end))
-
-
-print(
-    "[+] sh_user_path implementations after cleanup:",
-    len(verify_definitions)
-)
-
-if len(verify_definitions) != 1:
-    print("[!] ERROR: sh_user_path cleanup failed.")
+if final_count != 1:
+    print("[!] ERROR: sh_user_path() cleanup did not leave exactly one definition.")
     sys.exit(1)
 
-print("[OK] sh_user_path cleanup successful.")
+print("[OK] sh_user_path() cleanup successful.")
 PY
-
 fi
 
-# ============================================================
-# FINAL KSU SOURCE CHECK
-# ============================================================
+# ------------------------------------------------------------------
+# Final source checks. These are intentionally strict so a bad source
+# integration fails before a long kernel compile.
+# ------------------------------------------------------------------
 
-echo
 echo "============================================================"
 echo "[+] Final KernelSU source verification"
 echo "============================================================"
 
-echo
-echo "[*] ksu_late_loaded:"
-grep -Rnw "${KSU_DIR}" \
-    -e "ksu_late_loaded" 2>/dev/null |
-    head -n 20 || true
+if [[ -f "${INIT_C}" ]]; then
+    LATE_DEFS="$(
+        grep -Ec \
+            '^[[:space:]]*(static[[:space:]]+)?bool[[:space:]]+ksu_late_loaded[[:space:]]*(=[^;]+)?;[[:space:]]*$' \
+            "${INIT_C}" || true
+    )"
+    echo "[*] ksu_late_loaded declarations in init.c: ${LATE_DEFS}"
+    if [[ "${LATE_DEFS}" -ne 1 ]]; then
+        echo "[!] ERROR: expected exactly one ksu_late_loaded definition in init.c."
+        grep -n -B 3 -A 5 "ksu_late_loaded" "${INIT_C}" || true
+        exit 1
+    fi
+fi
 
-echo
-echo "[*] ksu_webview_zygote_umount_enabled:"
-grep -Rnw "${KSU_DIR}" \
-    -e "ksu_webview_zygote_umount_enabled" 2>/dev/null |
-    head -n 20 || true
+if [[ -f "${ALLOWLIST_C}" ]]; then
+    WEBVIEW_DEFS="$(
+        grep -Ec \
+            '^[[:space:]]*(static[[:space:]]+)?bool[[:space:]]+ksu_webview_zygote_umount_enabled[[:space:]]*(=[^;]+)?;[[:space:]]*$' \
+            "${ALLOWLIST_C}" || true
+    )"
+    echo "[*] ksu_webview_zygote_umount_enabled declarations in allowlist.c: ${WEBVIEW_DEFS}"
+    if [[ "${WEBVIEW_DEFS}" -ne 1 ]]; then
+        echo "[!] ERROR: expected exactly one webview flag definition in allowlist.c."
+        grep -n -B 3 -A 5 "ksu_webview_zygote_umount_enabled" "${ALLOWLIST_C}" || true
+        exit 1
+    fi
+fi
 
-echo
-echo "[*] sh_user_path:"
-grep -Rnw "${KSU_DIR}/feature" \
-    -e "sh_user_path" 2>/dev/null |
-    head -n 30 || true
+if [[ -f "${SUCOMPAT_C}" ]]; then
+    SH_USER_PATH_DEFS="$(
+        grep -Ec \
+            '^[[:space:]]*(static[[:space:]]+)?(__attribute__\(\(weak\)\)[[:space:]]+)?char[[:space:]]+__user[[:space:]]*\*[[:space:]]*sh_user_path[[:space:]]*\([[:space:]]*void[[:space:]]*\)' \
+            "${SUCOMPAT_C}" || true
+    )"
+    echo "[*] sh_user_path() definitions in sucompat.c: ${SH_USER_PATH_DEFS}"
+    if [[ "${SH_USER_PATH_DEFS}" -ne 1 ]]; then
+        echo "[!] ERROR: expected exactly one sh_user_path() definition."
+        grep -n -B 5 -A 15 "sh_user_path" "${SUCOMPAT_C}" || true
+        exit 1
+    fi
+fi
 
-echo
 echo "[OK] KernelSU source preparation completed."
 
-# ============================================================
-# SCM VERSION
-# ============================================================
-
 touch .scmversion
-
-# ============================================================
-# BUILD CONFIGURATION
-# ============================================================
 
 BUILD_PHASE="config generation"
 
@@ -614,7 +445,6 @@ fi
 
 read -r -a ACTIVE_CONFIG_ARRAY <<< "${ACTIVE_BUILD_CONFIGS}"
 
-echo
 echo "============================================================"
 echo "[+] Generating kernel configuration"
 echo "============================================================"
@@ -625,10 +455,6 @@ make "${MAKE_ARGS[@]}" \
     gki_defconfig \
     "${ACTIVE_CONFIG_ARRAY[@]}"
 
-# ============================================================
-# KSU / SUSFS / KPM / ZEROMOUNT CONFIG
-# ============================================================
-
 if [[ "${KSU_TYPE}" == *ZeroMount* ||
       "${KSU_TYPE}" == *zeromount* ||
       "${KSU_TYPE}" == *SukiSU* ||
@@ -636,125 +462,60 @@ if [[ "${KSU_TYPE}" == *ZeroMount* ||
       "${KSU_TYPE}" == *nomount* ||
       "${KSU_TYPE}" == *KPM* ]]; then
 
-    echo
     echo "[+] Enabling KernelSU / KPM / SUSFS / ZeroMount options."
 
-    scripts/config \
-        --file out/.config \
-        --enable CONFIG_KSU || true
-
-    scripts/config \
-        --file out/.config \
-        --enable CONFIG_KPM || true
-
-    scripts/config \
-        --file out/.config \
-        --enable CONFIG_KALLSYMS || true
-
-    scripts/config \
-        --file out/.config \
-        --enable CONFIG_KALLSYMS_ALL || true
-
-    scripts/config \
-        --file out/.config \
-        --enable CONFIG_KSU_SUSFS || true
-
-    scripts/config \
-        --file out/.config \
-        --enable CONFIG_KSU_SUSFS_SUS_MAP || true
-
-    scripts/config \
-        --file out/.config \
-        --enable CONFIG_KSU_SUSFS_OPEN_REDIRECT || true
-
-    scripts/config \
-        --file out/.config \
-        --enable CONFIG_ZEROMOUNT || true
-
-    scripts/config \
-        --file out/.config \
-        --enable CONFIG_ZEROMOUNT_VFS || true
-
-    scripts/config \
-        --file out/.config \
-        --enable CONFIG_NOMOUNT || true
+    scripts/config --file out/.config --enable CONFIG_KSU || true
+    scripts/config --file out/.config --enable CONFIG_KPM || true
+    scripts/config --file out/.config --enable CONFIG_KALLSYMS || true
+    scripts/config --file out/.config --enable CONFIG_KALLSYMS_ALL || true
+    scripts/config --file out/.config --enable CONFIG_KSU_SUSFS || true
+    scripts/config --file out/.config --enable CONFIG_KSU_SUSFS_SUS_MAP || true
+    scripts/config --file out/.config --enable CONFIG_KSU_SUSFS_OPEN_REDIRECT || true
+    scripts/config --file out/.config --enable CONFIG_ZEROMOUNT || true
+    scripts/config --file out/.config --enable CONFIG_ZEROMOUNT_VFS || true
+    scripts/config --file out/.config --enable CONFIG_NOMOUNT || true
 fi
 
 apply_variant_configs out/.config
-
 make "${MAKE_ARGS[@]}" olddefconfig
 
 CONFIG_SECONDS=$(($(date +%s) - CONFIG_STARTED_AT))
 
-# ============================================================
-# KERNEL COMPILATION
-# ============================================================
-
 BUILD_PHASE="kernel compilation"
-
 COMPILE_STARTED_AT="$(date +%s)"
 
-echo
 echo "============================================================"
 echo "[+] Building kernel Image"
 echo "============================================================"
 
-if ! make \
-    -j"$(nproc)" \
-    "${MAKE_ARGS[@]}" \
-    Image 2>&1 |
-    tee build.log; then
-
+if ! make -j"$(nproc)" "${MAKE_ARGS[@]}" Image 2>&1 | tee build.log; then
     COMPILE_SECONDS=$(($(date +%s) - COMPILE_STARTED_AT))
-
     ccache --show-stats || true
 
-    echo
-    echo "============================================================"
     echo "==== BUILD ERROR SUMMARY ===="
-    echo "============================================================"
-
     grep -nE \
         ' error:|undefined reference|No rule to make target|fatal error:' \
-        build.log |
-        tail -n 80 || true
+        build.log | tail -n 80 || true
 
-    echo
-    echo "============================================================"
     echo "==== BUILD FAILED - LAST 200 LINES ===="
-    echo "============================================================"
-
     tail -n 200 build.log || true
-
     exit 1
 fi
 
 COMPILE_SECONDS=$(($(date +%s) - COMPILE_STARTED_AT))
-
-# ============================================================
-# FINAL IMAGE CHECK
-# ============================================================
-
 ccache --show-stats || true
 
 IMAGE_PATH="out/arch/arm64/boot/Image"
 
 if [[ ! -f "${IMAGE_PATH}" ]]; then
-
-    echo
     echo "[!] ERROR: Kernel Image was not generated."
-    echo "[!] Expected:"
-    echo "    ${SOC}/${IMAGE_PATH}"
-
+    echo "[!] Expected: ${SOC}/${IMAGE_PATH}"
     exit 1
 fi
 
 BUILD_PHASE="build complete"
 
-echo
 echo "============================================================"
-echo "[+] BUILD SUCCESSFUL"
-echo "============================================================"
-echo "[+] Kernel Image:"
+echo "[+] Kernel Image built successfully"
 echo "    ${SOC}/${IMAGE_PATH}"
 echo "============================================================"
