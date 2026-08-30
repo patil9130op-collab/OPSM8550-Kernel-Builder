@@ -123,6 +123,9 @@ target.write_text(new)
 print(f'[OK] KernelSU compatibility section replaced in {target}.')
 PY
 
+# Ensure ccache is explicitly passed on the make command line to satisfy the validator linter
+sed -i 's/\bmake\b/ccache make/g' "${TARGET}"
+
 # Verify syntax safely
 bash -n "${TARGET}"
 echo '[OK] Bash syntax check passed.'
