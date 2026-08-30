@@ -103,62 +103,49 @@ BUILD_PHASE="source integration"
 
 install_ksu_variant "${KSU_TYPE}"
 
-# Automated Python Patcher for ReSukiSU + SuSFS + KPM + VFS Drivers
+# Robust and definitive patcher for ReSukiSU symbols and definitions
 KSU_DIR="${KSU_KERNEL_DIR:-drivers/kernelsu}"
 if [[ -d "$KSU_DIR" ]]; then
-  echo "[+] Applying automated Python patcher for ReSukiSU/KPM/VFS symbols..."
+  echo "[+] Applying robust C-patcher for ReSukiSU symbols..."
   python3 -c "
 import os
 
 ksu_path = '$KSU_DIR'
 
-# 1. Inject ksu_late_loaded in init.c if missing
+# 1. Ensure ksu_late_loaded is defined in init.c
 init_file = os.path.join(ksu_path, 'core/init.c')
 if os.path.exists(init_file):
     with open(init_file, 'r') as f:
         content = f.read()
     if 'ksu_late_loaded' not in content:
-        idx = content.find('#include')
-        if idx != -1:
-            line_end = content.find('\n', idx)
-            content = content[:line_end] + '\nbool ksu_late_loaded = false;\n' + content[line_end:]
-            with open(init_file, 'w') as f:
-                f.write(content)
+        content = 'bool ksu_late_loaded = false;\n' + content
+        with open(init_file, 'w') as f:
+            f.write(content)
 
-# 2. Inject ksu_webview_zygote_umount_enabled in allowlist.c if missing
+# 2. Ensure ksu_webview_zygote_umount_enabled is defined in allowlist.c
 allowlist_file = os.path.join(ksu_path, 'policy/allowlist.c')
 if os.path.exists(allowlist_file):
     with open(allowlist_file, 'r') as f:
         content = f.read()
     if 'ksu_webview_zygote_umount_enabled' not in content:
-        idx = content.find('#include')
-        if idx != -1:
-            line_end = content.find('\n', idx)
-            content = content[:line_end] + '\nbool ksu_webview_zygote_umount_enabled = false;\n' + content[line_end:]
-            with open(allowlist_file, 'w') as f:
-                f.write(content)
+        content = 'bool ksu_webview_zygote_umount_enabled = false;\n' + content
+        with open(allowlist_file, 'w') as f:
+            f.write(content)
 
-# 3. Handle duplicate sh_user_path definition in sucompat.c cleanly
+# 3. Prevent duplicate definition of sh_user_path in sucompat.c
 sucompat_file = os.path.join(ksu_path, 'feature/sucompat.c')
 if os.path.exists(sucompat_file):
     with open(sucompat_file, 'r') as f:
-        lines = f.readlines()
-    
-    new_lines = []
-    found_first = False
-    for line in lines:
-        if 'static char __user *sh_user_path' in line:
-            if not found_first:
-                found_first = True
-                new_lines.append(line)
-            else:
-                new_lines.append('/* Duplicate definition handled: ' + line.strip() + ' */\n')
-        else:
-            new_lines.append(line)
-            
-    with open(sucompat_file, 'w') as f:
-        f.writelines(new_lines)
-print('[*] Source files successfully patched for ReSukiSU/KPM/VFS.')
+        content = f.read()
+    target = 'static char __user *sh_user_path'
+    if content.count(target) > 1:
+        parts = content.split(target)
+        new_content = parts[0] + target + parts[1]
+        for p in parts[2:]:
+            new_content += '/* duplicate sh_user_path removed */' + p
+        with open(sucompat_file, 'w') as f:
+            f.write(new_content)
+print('[*] ReSukiSU source files successfully hardened.')
 " || true
 fi
 
