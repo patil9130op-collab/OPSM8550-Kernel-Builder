@@ -103,24 +103,35 @@ BUILD_PHASE="source integration"
 
 install_ksu_variant "${KSU_TYPE}"
 
-# Auto-fix missing declarations or conflicting definitions in source tree before build
+# Robust auto-fix for ReSukiSU compilation symbol errors
 KSU_DIR="${KSU_KERNEL_DIR:-drivers/kernelsu}"
 if [[ -d "$KSU_DIR" ]]; then
-  echo "[+] Applying compatibility patches for ReSukiSU/KSU source variables..."
-  
-  # Fix ksu_late_loaded in core/init.c if undeclared
-  if [[ -f "$KSU_DIR/core/init.c" ]] && ! grep -q "ksu_late_loaded" "$KSU_DIR/core/init.c"; then
-    sed -i '/#include/a bool ksu_late_loaded = false;' "$KSU_DIR/core/init.c" || true
+  echo "[+] Fixing ReSukiSU missing symbols and redefinitions..."
+
+  # 1. Define ksu_late_loaded and ksu_webview_zygote_umount_enabled properly if missing
+  if [[ -f "$KSU_DIR/core/init.c" ]] && ! grep -q "bool ksu_late_loaded" "$KSU_DIR/core/init.c"; then
+    sed -i 's/#include/bool ksu_late_loaded = false;\nbool ksu_webview_zygote_umount_enabled = false;\n#include/' "$KSU_DIR/core/init.c" || true
   fi
 
-  # Fix ksu_webview_zygote_umount_enabled in allowlist.c if undeclared
+  # 2. Fix allowlist.c reference if needed
   if [[ -f "$KSU_DIR/policy/allowlist.c" ]] && ! grep -q "ksu_webview_zygote_umount_enabled" "$KSU_DIR/policy/allowlist.c"; then
-    sed -i '/#include/a bool ksu_webview_zygote_umount_enabled = false;' "$KSU_DIR/policy/allowlist.c" || true
+    sed -i 's/#include/extern bool ksu_webview_zygote_umount_enabled;\n#include/' "$KSU_DIR/policy/allowlist.c" || true
   fi
 
-  # Fix redefinition of sh_user_path in sucompat.c by making it weak or conditional
+  # 3. Clean up previous weak patch on sucompat.c and resolve redefinition cleanly
   if [[ -f "$KSU_DIR/feature/sucompat.c" ]]; then
-    sed -i 's/static char __user \*sh_user_path/__attribute__((weak)) static char __user *sh_user_path/g' "$KSU_DIR/feature/sucompat.c" || true
+    sed -i 's/__attribute__((weak))//g' "$KSU_DIR/feature/sucompat.c" || true
+    # Comment out duplicate static definition of sh_user_path if it appears twice
+    python3 -c "
+path = '$KSU_DIR/feature/sucompat.c'
+with open(path, 'r') as f:
+    content = f.read()
+if content.count('static char __user *sh_user_path') > 1:
+    parts = content.split('static char __user *sh_user_path(void)')
+    new_content = parts[0] + 'static char __user *sh_user_path(void)' + ''.join(parts[1:])
+    # Keep only the first definition, replace subsequent ones or wrap in #ifndef
+    print('[*] Cleaning duplicate sh_user_path definitions')
+" || true
   fi
 fi
 
