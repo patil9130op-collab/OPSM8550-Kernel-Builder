@@ -1,154 +1,46 @@
 #!/usr/bin/env bash
-#
-# Apply selected integrations, generate config, and build Image.
-#
-
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TARGET="${1:-scripts/compile-kernel.sh}"
 
-# shellcheck source=lib/git-helpers.sh
-. "${SCRIPT_DIR}/lib/git-helpers.sh"
-# shellcheck source=lib/kernel-helpers.sh
-. "${SCRIPT_DIR}/lib/kernel-helpers.sh"
-# shellcheck source=lib/ksu-setup.sh
-. "${SCRIPT_DIR}/lib/ksu-setup.sh"
-# shellcheck source=lib/susfs-apply.sh
-. "${SCRIPT_DIR}/lib/susfs-apply.sh"
-# shellcheck source=lib/nomount-setup.sh
-. "${SCRIPT_DIR}/lib/nomount-setup.sh"
-# shellcheck source=lib/verify.sh
-. "${SCRIPT_DIR}/lib/verify.sh"
+[[ -f "${TARGET}" ]] || { echo "[!] Missing ${TARGET}"; exit 1; }
 
-: "${GITHUB_WORKSPACE:?}"
-: "${GITHUB_STEP_SUMMARY:?}"
-: "${CLANG_VERSION:?}"
-: "${SOC:?}"
-: "${BUILD_CONFIGS:?}"
-: "${SOURCE_LAYOUT:?}"
-: "${OFFICIAL_BUILD_TARGET:?}"
-: "${KSU_TYPE:?}"
-: "${KERNEL_BRANCH:?}"
-: "${KERNEL_COMMIT:?}"
-: "${BUILD_MODE:?}"
+TMP_BLOCK="$(mktemp)"
+trap 'rm -f "${TMP_BLOCK}"' EXIT
 
-BUILD_STARTED_AT="$(date +%s)"
-CONFIG_SECONDS=0
-COMPILE_SECONDS=0
-BUILD_PHASE="setup"
+cat > "${TMP_BLOCK}" <<'BLOCK_EOF'
+# ------------------------------------------------------------------
+# Cross-translation-unit KernelSU declarations.
+# A definition in init.c is not visible to selinux_hide.c unless the latter
+# sees an extern declaration. Repair every affected C translation unit directly.
+# ------------------------------------------------------------------
+ensure_extern_for_ksu_symbol() {
+    local symbol="$1"
+    python3 - "${KSU_DIR}" "${symbol}" <<'PY'
+import re
+import sys
+from pathlib import Path
 
-publish_performance_summary() {
-    local status="$?"
-    local finished_at
-    local elapsed
-
-    trap - EXIT
-    finished_at="$(date +%s)"
-    elapsed=$((finished_at - BUILD_STARTED_AT))
-
-    {
-        echo "### Build performance"
-        if [[ "${status}" -eq 0 ]]; then
-            echo "- Result: success"
-        else
-            echo "- Result: failure"
-        fi
-        echo "- Last phase: ${BUILD_PHASE}"
-        echo "- Config/patch time: ${CONFIG_SECONDS}s"
-        echo "- Compile time: ${COMPILE_SECONDS}s"
-        echo "- Script total: ${elapsed}s"
-        if command -v ccache >/dev/null 2>&1; then
-            echo
-            echo '```text'
-            ccache --show-stats || true
-            echo '```'
-        fi
-    } >> "${GITHUB_STEP_SUMMARY}"
-
-    exit "${status}"
-}
-
-trap publish_performance_summary EXIT
-
-CLANG_ROOT="${GITHUB_WORKSPACE}/toolchains/${CLANG_VERSION}/bin"
-export PATH="${CLANG_ROOT}:${PATH}"
-export ARCH=arm64
-export SUBARCH=arm64
-export LLVM=1
-export LLVM_IAS=1
-export CCACHE_DIR="${GITHUB_WORKSPACE}/.ccache"
-export CCACHE_BASEDIR="${GITHUB_WORKSPACE}"
-export CCACHE_NOHASHDIR=true
-export CCACHE_COMPILERCHECK=content
-export CCACHE_COMPRESS=true
-export CCACHE_COMPRESSLEVEL=6
-export CCACHE_MAXSIZE=3G
-mkdir -p "${CCACHE_DIR}"
-
-cd "${SOC}"
-
-SOURCE_DATE_EPOCH="$(git show -s --format=%ct "${KERNEL_COMMIT}")"
-export SOURCE_DATE_EPOCH
-KBUILD_BUILD_TIMESTAMP="$(date -u -d "@${SOURCE_DATE_EPOCH}" '+%Y-%m-%d %H:%M:%S UTC')"
-export KBUILD_BUILD_TIMESTAMP
-export KBUILD_BUILD_USER=opskernel
-export KBUILD_BUILD_HOST=github-actions
-
-MAKE_ARGS=(
-    O=out
-    LLVM=1
-    LLVM_IAS=1
-    "CC=ccache clang"
-    "CXX=ccache clang++"
-    "HOSTCC=ccache clang"
-    "HOSTCXX=ccache clang++"
+root = Path(sys.argv[1])
+symbol = sys.argv[2]
+decl_re = re.compile(
+    rf'(?m)^[ \t]*(?:(?:static|extern|const|volatile|__init|__read_mostly)[ \t]+)*'
+    rf'bool[ \t]+{re.escape(symbol)}[ \t]*(?:=[^;]+)?;[ \t]*$'
 )
+use_re = re.compile(rf'\b{re.escape(symbol)}\b')
+include_re = re.compile(r'(?m)^[ \t]*#include[^\n]*\n')
 
-ccache --zero-stats || true
-
-CONFIG_STARTED_AT="$(date +%s)"
-BUILD_PHASE="source integration"
-
-echo "============================================================"
-echo "[+] Installing KernelSU"
-echo "    TYPE: ${KSU_TYPE}"
-echo "============================================================"
-
-install_ksu_variant "${KSU_TYPE}"
-
-KSU_DIR="${KSU_KERNEL_DIR:-drivers/kernelsu}"
-
-if [[ ! -d "${KSU_DIR}" ]]; then
-    echo "[!] ERROR: KernelSU directory not found: ${KSU_DIR}"
-    exit 1
-fi
-
-echo "[OK] KernelSU directory: ${KSU_DIR}"
-
-if [[ "${KSU_TYPE}" == *susfs* ||
-      "${KSU_TYPE}" == *SUSFS* ||
-      "${KSU_TYPE}" == *ZeroMount* ||
-      "${KSU_TYPE}" == *zeromount* ||
-      "${KSU_TYPE}" == *nomount* ]]; then
-
-    : "${SUSFS_REF:?}"
-    : "${SUSFS_COMMIT:?}"
-    : "${SUSFS_PATCH_FILE:?}"
-
-    echo "============================================================"
-    echo "[+] Applying SUSFS"
-    echo "    REF    : ${SUSFS_REF}"
-    echo "    COMMIT : ${SUSFS_COMMIT}"
-    echo "    PATCH  : ${SUSFS_PATCH_FILE}"
-    echo "============================================================"
-
-    apply_susfs_full \
-        "${SUSFS_REF}" \
-        "${SUSFS_COMMIT}" \
-        "${SUSFS_PATCH_FILE}"
-
-    echo "[OK] SUSFS integration finished."
-fi
+for path in sorted(root.rglob('*.c')):
+    text = path.read_text(encoding='utf-8', errors='replace')
+    if not use_re.search(text) or decl_re.search(text):
+        continue
+    includes = list(include_re.finditer(text))
+    pos = includes[-1].end() if includes else 0
+    text = text[:pos] + '\nextern bool ' + symbol + ';\n' + text[pos:]
+    path.write_text(text, encoding='utf-8')
+    print(f'[+] Added extern bool {symbol}; to {path}')
+PY
+}
 
 # ------------------------------------------------------------------
 # KernelSU compatibility repair.
@@ -239,6 +131,11 @@ if [[ -f "${ALLOWLIST_C}" ]]; then
         "ksu_webview_zygote_umount_enabled" \
         "bool ksu_webview_zygote_umount_enabled = false;"
 fi
+
+# SUSFS/ReSukiSU can rewrite KSU files. Re-run visibility repair after all
+# definitions are normalized, before final verification and compilation.
+ensure_extern_for_ksu_symbol "ksu_late_loaded"
+ensure_extern_for_ksu_symbol "ksu_webview_zygote_umount_enabled"
 
 # ------------------------------------------------------------------
 # Remove duplicate sh_user_path() implementations safely.
@@ -431,91 +328,65 @@ if [[ -f "${SUCOMPAT_C}" ]]; then
     fi
 fi
 
+# Verify every C translation unit that uses these globals has a visible
+# declaration. This catches the exact compile failure before the long build.
+python3 - "${KSU_DIR}" <<'PY'
+import re
+import sys
+from pathlib import Path
+
+root = Path(sys.argv[1])
+
+for symbol in ("ksu_late_loaded", "ksu_webview_zygote_umount_enabled"):
+    bad = []
+    for path in sorted(root.rglob("*.c")):
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if not re.search(rf"\b{re.escape(symbol)}\b", text):
+            continue
+        if not re.search(
+            rf"(?m)^[ \t]*(?:extern[ \t]+)?bool[ \t]+{re.escape(symbol)}[ \t]*(?:=[^;]+)?;",
+            text,
+        ):
+            bad.append(str(path))
+    if bad:
+        print(f"[!] ERROR: {symbol} is used without a visible bool declaration in:")
+        for item in bad:
+            print(f"    {item}")
+        sys.exit(1)
+    print(f"[OK] All C users of {symbol} have a visible declaration.")
+PY
+
+SELINUX_HIDE_C="${KSU_DIR}/feature/selinux_hide.c"
+if [[ -f "${SELINUX_HIDE_C}" ]]; then
+    if ! grep -Eq '^[[:space:]]*extern[[:space:]]+bool[[:space:]]+ksu_late_loaded[[:space:]]*;' "${SELINUX_HIDE_C}" &&
+       ! grep -Eq '^[[:space:]]*bool[[:space:]]+ksu_late_loaded[[:space:]]*(=|;)' "${SELINUX_HIDE_C}"; then
+        echo "[!] ERROR: selinux_hide.c still has no visible ksu_late_loaded declaration."
+        grep -n -B 3 -A 5 "ksu_late_loaded" "${SELINUX_HIDE_C}" || true
+        exit 1
+    fi
+    echo "[OK] selinux_hide.c can see ksu_late_loaded."
+fi
+
 echo "[OK] KernelSU source preparation completed."
+BLOCK_EOF
 
-touch .scmversion
+python3 - "${TARGET}" "${TMP_BLOCK}" <<'PY'
+import sys
+from pathlib import Path
 
-BUILD_PHASE="config generation"
+target = Path(sys.argv[1])
+block = Path(sys.argv[2]).read_text()
+text = target.read_text()
+start_marker = 'INIT_C="${KSU_DIR}/core/init.c"'
+end_marker = '# SCM VERSION'
+start = text.find(start_marker)
+end = text.find(end_marker, start + 1 if start >= 0 else 0)
+if start < 0 or end < 0 or end <= start:
+    raise SystemExit('[!] Could not locate the KernelSU compatibility section in scripts/compile-kernel.sh')
+new = text[:start] + block.rstrip() + '\n\n' + text[end:]
+target.write_text(new)
+print(f'[OK] KernelSU compatibility section replaced in {target}.')
+PY
 
-ACTIVE_BUILD_CONFIGS="${BUILD_CONFIGS}"
-
-if [[ "${SOURCE_LAYOUT}" == "oneplus-official" ]]; then
-    ACTIVE_BUILD_CONFIGS="vendor/${OFFICIAL_BUILD_TARGET}_GKI.config"
-fi
-
-read -r -a ACTIVE_CONFIG_ARRAY <<< "${ACTIVE_BUILD_CONFIGS}"
-
-echo "============================================================"
-echo "[+] Generating kernel configuration"
-echo "============================================================"
-
-apply_variant_configs arch/arm64/configs/gki_defconfig
-
-make "${MAKE_ARGS[@]}" \
-    gki_defconfig \
-    "${ACTIVE_CONFIG_ARRAY[@]}"
-
-if [[ "${KSU_TYPE}" == *ZeroMount* ||
-      "${KSU_TYPE}" == *zeromount* ||
-      "${KSU_TYPE}" == *SukiSU* ||
-      "${KSU_TYPE}" == *ReSukiSU* ||
-      "${KSU_TYPE}" == *nomount* ||
-      "${KSU_TYPE}" == *KPM* ]]; then
-
-    echo "[+] Enabling KernelSU / KPM / SUSFS / ZeroMount options."
-
-    scripts/config --file out/.config --enable CONFIG_KSU || true
-    scripts/config --file out/.config --enable CONFIG_KPM || true
-    scripts/config --file out/.config --enable CONFIG_KALLSYMS || true
-    scripts/config --file out/.config --enable CONFIG_KALLSYMS_ALL || true
-    scripts/config --file out/.config --enable CONFIG_KSU_SUSFS || true
-    scripts/config --file out/.config --enable CONFIG_KSU_SUSFS_SUS_MAP || true
-    scripts/config --file out/.config --enable CONFIG_KSU_SUSFS_OPEN_REDIRECT || true
-    scripts/config --file out/.config --enable CONFIG_ZEROMOUNT || true
-    scripts/config --file out/.config --enable CONFIG_ZEROMOUNT_VFS || true
-    scripts/config --file out/.config --enable CONFIG_NOMOUNT || true
-fi
-
-apply_variant_configs out/.config
-make "${MAKE_ARGS[@]}" olddefconfig
-
-CONFIG_SECONDS=$(($(date +%s) - CONFIG_STARTED_AT))
-
-BUILD_PHASE="kernel compilation"
-COMPILE_STARTED_AT="$(date +%s)"
-
-echo "============================================================"
-echo "[+] Building kernel Image"
-echo "============================================================"
-
-if ! make -j"$(nproc)" "${MAKE_ARGS[@]}" Image 2>&1 | tee build.log; then
-    COMPILE_SECONDS=$(($(date +%s) - COMPILE_STARTED_AT))
-    ccache --show-stats || true
-
-    echo "==== BUILD ERROR SUMMARY ===="
-    grep -nE \
-        ' error:|undefined reference|No rule to make target|fatal error:' \
-        build.log | tail -n 80 || true
-
-    echo "==== BUILD FAILED - LAST 200 LINES ===="
-    tail -n 200 build.log || true
-    exit 1
-fi
-
-COMPILE_SECONDS=$(($(date +%s) - COMPILE_STARTED_AT))
-ccache --show-stats || true
-
-IMAGE_PATH="out/arch/arm64/boot/Image"
-
-if [[ ! -f "${IMAGE_PATH}" ]]; then
-    echo "[!] ERROR: Kernel Image was not generated."
-    echo "[!] Expected: ${SOC}/${IMAGE_PATH}"
-    exit 1
-fi
-
-BUILD_PHASE="build complete"
-
-echo "============================================================"
-echo "[+] Kernel Image built successfully"
-echo "    ${SOC}/${IMAGE_PATH}"
-echo "============================================================"
+bash -n "${TARGET}"
+echo '[OK] Bash syntax check passed.'
