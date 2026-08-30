@@ -5,6 +5,11 @@ TARGET="${1:-scripts/compile-kernel.sh}"
 
 [[ -f "${TARGET}" ]] || { echo "[!] Missing ${TARGET}"; exit 1; }
 
+# Fix Windows CRLF line endings if any exist
+if command -v dos2unix &> /dev/null; then
+    dos2unix "${TARGET}"
+fi
+
 TMP_BLOCK="$(mktemp)"
 trap 'rm -f "${TMP_BLOCK}"' EXIT
 
@@ -118,8 +123,6 @@ target.write_text(new)
 print(f'[OK] KernelSU compatibility section replaced in {target}.')
 PY
 
-# Make sure your main compile command inside scripts/compile-kernel.sh includes ccache like this:
-# make CC="ccache clang" ... (or similar ccache wrapper)
-
+# Verify syntax safely
 bash -n "${TARGET}"
 echo '[OK] Bash syntax check passed.'
